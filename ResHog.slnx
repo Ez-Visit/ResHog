@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ResHog.Service/ResHog.Service.csproj" />
+    <Project Path="src/ResHog.Shared/ResHog.Shared.csproj" />
+    <Project Path="src/ResHog.UI/ResHog.UI.csproj" />
+  </Folder>
+</Solution>

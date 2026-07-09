@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ResHog.Service</AssemblyName>
+    <RootNamespace>ResHog</RootNamespace>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
+    <Company>ResHog</Company>
+    <Product>ResHog - Windows Resource Monitor</Product>
+    <Description>Long-running Windows resource monitor that identifies resource-heavy applications and services.</Description>
+
+    <!-- SQLitePCLRaw 2.1.11 has a known vulnerability (GHSA-2m69-gcr7-jv3q).
+         This is a transitive dependency of Microsoft.Data.Sqlite.
+         Suppress until upstream releases a fix. Track before production release. -->
+    <!-- CS1591: missing XML doc comments — will add comprehensive docs before v1.0 release -->
+    <!-- IL2104/IL2026: ASP.NET Core & Serilog 框架级裁剪告警，TrimMode=partial 下为已知行为 -->
+    <NoWarn>NU1903;CS1591;IL2104;IL2026</NoWarn>
+
+    <!-- Suppress the default static wwwroot/content files; this is an API-only service -->
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <!-- appsettings.json 必须复制到输出/发布目录（EnableDefaultContentItems=false 会阻止默认复制） -->
+  <ItemGroup>
+    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="appsettings.Development.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('appsettings.Development.json')" />
+    <Content Include="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- 发布配置：self-contained 单文件 + 部分裁剪（技术方案 12.1.1）
+       仅在 dotnet publish 时生效，不影响日常 dotnet run / build
+       发布命令: dotnet publish -c Release -r win-x64 -self-contained true -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!-- 部分裁剪（服务端使用 WMI/反射/PDH P/Invoke，需 partial 模式） -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+
+    <!-- 体积优化 -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+    <DebuggerSupport>false</DebuggerSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <!-- Microsoft.AspNetCore.App framework reference is auto-included by Web SDK (Kestrel, Minimal API) -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.9" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ResHog.Shared\ResHog.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

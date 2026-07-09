@@ -1,0 +1,75 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:ResHog.SetupUI"
+        x:Class="ResHog.SetupUI.MainWindow"
+        x:DataType="local:InstallerViewModel"
+        Title="ResHog Setup"
+        Width="520" Height="420"
+        CanResize="False"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Styles>
+        <Style Selector="TextBlock.stepIcon">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Width" Value="24" />
+            <Setter Property="TextAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.stepTitle">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.running">
+            <Setter Property="Foreground" Value="#378ADD" />
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="32">
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="4" Margin="0,20,0,24">
+            <TextBlock Text="ResHog Setup"
+                       FontSize="22" FontWeight="SemiBold" Foreground="#222" />
+            <TextBlock Text="Windows Resource Monitor Installer"
+                       FontSize="13" Foreground="#888" />
+        </StackPanel>
+
+        <!-- Steps -->
+        <ItemsControl Grid.Row="1" ItemsSource="{Binding Steps}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:InstallStep">
+                    <Grid ColumnDefinitions="24,*,Auto" Margin="0,10" Height="36">
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding StatusIcon}"
+                                   Foreground="{Binding StatusColor}"
+                                   Classes="stepIcon" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding Title}"
+                                   Classes="stepTitle"
+                                   Foreground="{Binding StatusColor}" />
+                        <TextBlock Grid.Column="2"
+                                   Text="{Binding Status}"
+                                   FontSize="11"
+                                   Foreground="{Binding StatusColor}"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Footer -->
+        <StackPanel Grid.Row="2" Spacing="12" Margin="0,20,0,0">
+            <TextBlock Text="{Binding StatusText}"
+                       FontSize="13"
+                       TextWrapping="Wrap"
+                       Foreground="#555" />
+            <Button Content="关闭"
+                    IsVisible="{Binding IsComplete}"
+                    HorizontalAlignment="Right"
+                    Padding="24,8"
+                    FontSize="13"
+                    Click="OnCloseClick" />
+        </StackPanel>
+
+    </Grid>
+
+</Window>

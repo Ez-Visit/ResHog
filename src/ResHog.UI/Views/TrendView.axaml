@@ -1,0 +1,107 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ResHog.UI.ViewModels"
+             xmlns:ctl="using:ResHog.UI.Controls"
+             xmlns:cvt="using:ResHog.UI.Converters"
+             x:Class="ResHog.UI.Views.TrendView"
+             x:DataType="vm:TrendViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="#FAFAFA" Padding="16,10">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="进程:" VerticalAlignment="Center" FontSize="13" />
+                <AutoCompleteBox x:Name="ProcessFilter"
+                                 Text="{Binding SelectedProcess}"
+                                 ItemsSource="{Binding ProcessNames}"
+                                 FilterMode="Contains"
+                                 MinimumPrefixLength="0"
+                                 IsTextCompletionEnabled="False"
+                                 PlaceholderText="输入进程名..."
+                                 MinWidth="180" />
+
+                <TextBlock Text="指标:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedMetricOption}"
+                          ItemsSource="{Binding MetricOptions}"
+                          MinWidth="120">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBlock Text="范围:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedRangeOption}"
+                          ItemsSource="{Binding RangeOptions}"
+                          MinWidth="140">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Button Content="查询"
+                        Command="{Binding LoadTrendCommand}"
+                        IsDefault="True"
+                        IsEnabled="{Binding !IsLoading}"
+                        Padding="16,6" />
+
+                <ProgressBar IsVisible="{Binding IsLoading}"
+                             IsIndeterminate="True"
+                             Width="80"
+                             Height="4" />
+            </StackPanel>
+        </Border>
+
+        <!-- Line chart -->
+        <Border Grid.Row="1" Background="White" Margin="16,8">
+            <ctl:LineChart DataPoints="{Binding TrendPoints}"
+                           LineColor="#D85A30"
+                           Unit="{Binding SelectedMetric, Converter={x:Static cvt:MetricToUnitConverter.Instance}}"
+                           Margin="8" />
+        </Border>
+
+        <!-- Statistics summary -->
+        <Border Grid.Row="2" Background="#FAFAFA" Padding="16,8"
+                BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+            <Grid ColumnDefinitions="*,*,*,*">
+                <StackPanel Grid.Column="0" Spacing="2">
+                    <TextBlock Text="平均值" FontSize="11" Foreground="#888" />
+                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Bottom">
+                        <TextBlock Text="{Binding AvgValue, StringFormat='{}{0:F2}'}"
+                                   FontSize="18" FontWeight="SemiBold" Foreground="#333" />
+                        <TextBlock Text="{Binding TrendUnit}"
+                                   FontSize="13" Foreground="#666"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="峰值" FontSize="11" Foreground="#888" />
+                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Bottom">
+                        <TextBlock Text="{Binding MaxValue, StringFormat='{}{0:F2}'}"
+                                   FontSize="18" FontWeight="SemiBold" Foreground="#D85A30" />
+                        <TextBlock Text="{Binding TrendUnit}"
+                                   FontSize="13" Foreground="#666"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="2">
+                    <TextBlock Text="服务名" FontSize="11" Foreground="#888" />
+                    <TextBlock Text="{Binding SelectedProcessServiceName}"
+                               FontSize="14" FontWeight="SemiBold" Foreground="#333" />
+                </StackPanel>
+                <StackPanel Grid.Column="3" Spacing="2">
+                    <TextBlock Text="详细信息" FontSize="11" Foreground="#888" />
+                    <TextBlock Text="{Binding ProcessDetailInfo}"
+                               FontSize="11" Foreground="#555"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+    </Grid>
+
+</UserControl>

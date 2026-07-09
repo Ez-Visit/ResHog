@@ -1,0 +1,43 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ResHog.UI.App"
+             RequestedThemeVariant="Light">
+
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
+    </Application.Styles>
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- 资源指标色 -->
+            <SolidColorBrush x:Key="CpuBarColor" Color="#D85A30" />
+            <SolidColorBrush x:Key="MemBarColor" Color="#378ADD" />
+            <SolidColorBrush x:Key="IoBarColor" Color="#1D9E75" />
+            <SolidColorBrush x:Key="AlertCriticalColor" Color="#E24B4A" />
+            <SolidColorBrush x:Key="AlertWarningColor" Color="#EF9F27" />
+            <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="CardBorder" Color="#E0E0E0" />
+            <SolidColorBrush x:Key="StatusBarBackground" Color="#F5F5F5" />
+            <SolidColorBrush x:Key="OfflineColor" Color="#999999" />
+            <SolidColorBrush x:Key="OnlineColor" Color="#1D9E75" />
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <TrayIcon.Icons>
+        <TrayIcons>
+            <TrayIcon ToolTipText="ResHog 资源监控"
+                      Icon="avares://ResHog.UI/Assets/tray.png"
+                      Clicked="OnTrayClicked">
+                <TrayIcon.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="打开窗口" Click="OnTrayOpen" />
+                        <NativeMenuItemSeparator />
+                        <NativeMenuItem Header="退出" Click="OnTrayExit" />
+                    </NativeMenu>
+                </TrayIcon.Menu>
+            </TrayIcon>
+        </TrayIcons>
+    </TrayIcon.Icons>
+
+</Application>

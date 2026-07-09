@@ -1,0 +1,107 @@
+## .NET / C# 项目忽略规则
+
+### 构建产物
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+publish/
+publish-*/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+### NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+
+### Visual Studio
+.vs/
+*.cache
+*.vc.db
+*.vc.db-shm
+*.vc.db-wal
+*.vsthink.db
+*.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+### Rider / IntelliJ
+.idea/
+*.sln.iml
+
+### VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+### 测试结果
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+coverage*.xml
+coverage*.json
+
+### BenchmarkDotNet
+BenchmarkDotNet.Artifacts/
+
+### 运行时数据（本地开发时生成）
+*.db
+*.db-wal
+*.db-shm
+*.log
+logs/
+logs-*/
+data/
+*.sqlite
+*.sqlite3
+
+### 发布产物
+deploy/publish/
+deploy/release/
+*.zip
+
+### 安装包构建中间产物（由 build-setup.ps1 生成）
+deploy/Setup/Payload/
+deploy/Setup/Payload.zip
+deploy/SetupUI/Payload/
+deploy/SetupUI/Payload.zip
+
+### WorkBuddy 工作区数据
+.workbuddy/
+
+### 敏感配置
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
+*.pfx
+*.p12
+*.key
+
+### Avalonia
+*.axaml.baml
+
+### 临时文件
+*.tmp
+*.bak
+*.orig
+*.swp
+*~

@@ -1,0 +1,157 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ResHog.UI.ViewModels"
+             xmlns:cvt="using:ResHog.UI.Converters"
+             xmlns:dto="using:ResHog.Shared.Dtos"
+             x:Class="ResHog.UI.Views.ProcessManagerView"
+             x:DataType="vm:ProcessManagerViewModel"
+             x:Name="root">
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="#FAFAFA" Padding="16,10">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="搜索:" VerticalAlignment="Center" FontSize="13" />
+                <TextBox Text="{Binding SearchQuery}"
+                         PlaceholderText="输入进程名或端口号..."
+                         MinWidth="240"
+                         VerticalAlignment="Center" />
+
+                <ComboBox SelectedItem="{Binding SelectedSearchMode}"
+                          ItemsSource="{Binding SearchModes}"
+                          MinWidth="130">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Button Content="搜索"
+                        Command="{Binding SearchCommand}"
+                        IsEnabled="{Binding !IsLoading}"
+                        Padding="16,6" />
+
+                <CheckBox IsChecked="{Binding AutoRefresh}"
+                          Content="自动刷新" />
+
+                <ProgressBar IsVisible="{Binding IsLoading}"
+                             IsIndeterminate="True"
+                             Width="80"
+                             Height="4" />
+            </StackPanel>
+        </Border>
+
+        <!-- Results table -->
+        <DataGrid Grid.Row="1"
+                  ItemsSource="{Binding SearchResults}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  BorderThickness="1"
+                  BorderBrush="#E0E0E0"
+                  Margin="16,8">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="70" />
+                <DataGridTemplateColumn Header="进程名" Width="240" SortMemberPath="ProcessName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <TextBlock Text="{Binding ProcessName}"
+                                       ToolTip.Tip="{Binding ProcessName}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="命令行" Width="280" SortMemberPath="CommandLine">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <TextBlock Text="{Binding CommandLine}"
+                                       ToolTip.Tip="{Binding CommandLine}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="线程数"
+                                    Binding="{Binding ThreadCount}"
+                                    Width="80" />
+                <DataGridTextColumn Header="内存 (MB)"
+                                    Binding="{Binding WorkingSetMb, StringFormat='{}{0:F0}'}"
+                                    Width="90" />
+                <DataGridTextColumn Header="CPU (%)"
+                                    Binding="{Binding CpuPercent, StringFormat='{}{0:F1}'}"
+                                    Width="70" />
+                <DataGridTextColumn Header="端口"
+                                    Binding="{Binding Ports}"
+                                    Width="160" />
+                <DataGridTemplateColumn Header="操作" Width="90">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <StackPanel HorizontalAlignment="Center">
+                                <Button Content="结束"
+                                        Padding="6,3"
+                                        FontSize="12"
+                                        Background="#FCEBEB"
+                                        Foreground="#A32D2D"
+                                        Tag="{Binding}"
+                                        Click="OnKillClick" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Status bar -->
+        <Border Grid.Row="2" Background="#FAFAFA" Padding="16,8"
+                BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+            <StackPanel>
+                <TextBlock Text="{Binding KillMessage}"
+                           FontSize="12" Foreground="#555"
+                           IsVisible="{Binding HasResultMessage}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Confirmation overlay (shown when killing a process) -->
+        <Border Grid.RowSpan="3"
+                Background="#80000000"
+                IsVisible="{Binding ShowConfirmOverlay}"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                ZIndex="100">
+            <Border Background="White"
+                    CornerRadius="8"
+                    Padding="24"
+                    Width="420"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    BorderBrush="#E0E0E0"
+                    BorderThickness="1">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="确认终止进程"
+                               FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding ConfirmMessage}"
+                               FontSize="13"
+                               TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+                        <Button Content="取消"
+                                Command="{Binding ConfirmKillCommand}"
+                                CommandParameter="False"
+                                Padding="20,8"
+                                FontSize="13" />
+                        <Button Content="确定终止"
+                                Command="{Binding ConfirmKillCommand}"
+                                CommandParameter="True"
+                                Padding="20,8"
+                                FontSize="13"
+                                Background="#E24B4A"
+                                Foreground="White" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+
+    </Grid>
+
+</UserControl>

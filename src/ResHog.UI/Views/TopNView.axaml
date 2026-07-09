@@ -1,0 +1,142 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ResHog.UI.ViewModels"
+             xmlns:ctl="using:ResHog.UI.Controls"
+             xmlns:cvt="using:ResHog.UI.Converters"
+             xmlns:dto="using:ResHog.Shared.Dtos"
+             x:Class="ResHog.UI.Views.TopNView"
+             x:DataType="vm:TopNViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="#FAFAFA" Padding="16,10">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="指标:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedMetricOption}"
+                          ItemsSource="{Binding MetricOptions}"
+                          MinWidth="120">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBlock Text="范围:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedRangeOption}"
+                          ItemsSource="{Binding RangeOptions}"
+                          MinWidth="140">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Button Content="刷新"
+                        Command="{Binding LoadDataCommand}"
+                        IsEnabled="{Binding !IsLoading}"
+                        Padding="16,6" />
+
+                <ProgressBar IsVisible="{Binding IsLoading}"
+                             IsIndeterminate="True"
+                             Width="100"
+                             Height="4" />
+            </StackPanel>
+        </Border>
+
+        <!-- Data table -->
+        <DataGrid Grid.Row="1"
+                  ItemsSource="{Binding Results}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  BorderThickness="1"
+                  BorderBrush="#E0E0E0"
+                  Margin="16,0">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="#"
+                                    Binding="{Binding Rank}"
+                                    Width="45" />
+                <DataGridTemplateColumn Header="进程名" Width="200" SortMemberPath="ProcessName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <TextBlock Text="{Binding ProcessName}"
+                                       ToolTip.Tip="{Binding ProcessName}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="服务名" Width="150" SortMemberPath="ServiceName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <TextBlock Text="{Binding ServiceName}"
+                                       ToolTip.Tip="{Binding ServiceName}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="平均值"
+                                    Binding="{Binding AvgValue, StringFormat=F2}"
+                                    Width="100" />
+                <DataGridTextColumn Header="峰值"
+                                    Binding="{Binding MaxValue, StringFormat=F2}"
+                                    Width="100" />
+                <DataGridTextColumn Header="单位"
+                                    Binding="{Binding Unit}"
+                                    Width="70" />
+                <DataGridTextColumn Header="指标"
+                                    Binding="{Binding MetricName, Converter={x:Static cvt:MetricNameConverter.Instance}}"
+                                    Width="100" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Bar chart visualization -->
+        <Border Grid.Row="2" Background="#FAFAFA" Padding="16,8" Margin="0,8,0,0"
+                BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+            <StackPanel Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="可视化 (平均值/峰值 稳定性)" FontSize="12" Foreground="#666" />
+                    <Button Content="?"
+                            ToolTip.Tip="各进程条形宽度 = 平均值 / 峰值 × 100%&#x0a;反映资源使用稳定性：&#x0a;  宽度越接近 100% → 均值接近峰值，资源使用稳定&#x0a;  宽度越小 → 存在较大波动（偶尔飙升但均值较低）"
+                            Width="22" Height="22"
+                            Padding="0"
+                            FontSize="11"
+                            FontWeight="Bold"
+                            Background="#E8E8E8"
+                            BorderThickness="1"
+                            BorderBrush="#CCC"
+                            Cursor="Hand" />
+                </StackPanel>
+                <ItemsControl ItemsSource="{Binding Results}" MaxHeight="200">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <Grid ColumnDefinitions="160,*,80" Margin="0,2" Height="20">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding ProcessName}"
+                                           FontSize="11"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" />
+                                <ctl:UsageBar Grid.Column="1"
+                                              Value="{Binding AvgValue}"
+                                              MaxValue="{Binding MaxValue}"
+                                              BarColor="{DynamicResource CpuBarColor}"
+                                              DisplayText="{Binding AvgValue, StringFormat='{}{0:F1}'}"
+                                              Margin="8,0" />
+                                <TextBlock Grid.Column="2"
+                                           Text="{Binding Unit}"
+                                           FontSize="10"
+                                           Foreground="#999"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+    </Grid>
+
+</UserControl>

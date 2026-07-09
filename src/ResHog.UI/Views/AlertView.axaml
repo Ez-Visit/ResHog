@@ -1,0 +1,134 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ResHog.UI.ViewModels"
+             xmlns:cvt="using:ResHog.UI.Converters"
+             xmlns:dto="using:ResHog.Shared.Dtos"
+             x:Class="ResHog.UI.Views.AlertView"
+             x:DataType="vm:AlertViewModel">
+
+    <Grid RowDefinitions="Auto,Auto,*">
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="#FAFAFA" Padding="16,10">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="范围:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedRangeOption}"
+                          ItemsSource="{Binding RangeOptions}"
+                          MinWidth="140">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBlock Text="级别:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedSeverityOption}"
+                          ItemsSource="{Binding SeverityOptions}"
+                          MinWidth="120">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Button Content="刷新"
+                        Command="{Binding LoadAlertsCommand}"
+                        IsEnabled="{Binding !IsLoading}"
+                        Padding="16,6" />
+
+                <ProgressBar IsVisible="{Binding IsLoading}"
+                             IsIndeterminate="True"
+                             Width="80"
+                             Height="4" />
+            </StackPanel>
+        </Border>
+
+        <!-- Summary -->
+        <Border Grid.Row="1" Background="White" Padding="16,10"
+                BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" Spacing="32">
+                <StackPanel Spacing="2">
+                    <TextBlock Text="总计" FontSize="11" Foreground="#888" />
+                    <TextBlock Text="{Binding TotalCount, StringFormat='{}{0} 条'}"
+                               FontSize="20" FontWeight="Bold" Foreground="#333" />
+                </StackPanel>
+                <StackPanel Spacing="2">
+                    <TextBlock Text="严重" FontSize="11" Foreground="#888" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="🔴" FontSize="16" />
+                        <TextBlock Text="{Binding CriticalCount, StringFormat='{}{0} 条'}"
+                                   FontSize="20" FontWeight="Bold" Foreground="#E24B4A" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Spacing="2">
+                    <TextBlock Text="警告" FontSize="11" Foreground="#888" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="🟡" FontSize="16" />
+                        <TextBlock Text="{Binding WarningCount, StringFormat='{}{0} 条'}"
+                                   FontSize="20" FontWeight="Bold" Foreground="#EF9F27" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Alert list -->
+        <DataGrid Grid.Row="2"
+                  ItemsSource="{Binding Alerts}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  BorderThickness="1"
+                  BorderBrush="#E0E0E0"
+                  Margin="16,8">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="时间" Width="180" SortMemberPath="Timestamp">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding Timestamp}"
+                                       ToolTip.Tip="{Binding Timestamp}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="进程名" Width="180" SortMemberPath="ProcessName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding ProcessName}"
+                                       ToolTip.Tip="{Binding ProcessName}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="PID"
+                                    Binding="{Binding Pid}"
+                                    Width="70" />
+                <DataGridTemplateColumn Header="服务名" Width="140" SortMemberPath="ServiceName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding ServiceName}"
+                                       ToolTip.Tip="{Binding ServiceName}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="指标"
+                                    Binding="{Binding Metric, Converter={x:Static cvt:MetricNameConverter.Instance}}"
+                                    Width="100" />
+                <DataGridTextColumn Header="当前值"
+                                    Binding="{Binding Value, StringFormat=F1}"
+                                    Width="90" />
+                <DataGridTextColumn Header="阈值"
+                                    Binding="{Binding Threshold, StringFormat=F1}"
+                                    Width="90" />
+                <DataGridTextColumn Header="级别"
+                                    Binding="{Binding Severity, Converter={x:Static cvt:SeverityNameConverter.Instance}}"
+                                    Width="80" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+    </Grid>
+
+</UserControl>
