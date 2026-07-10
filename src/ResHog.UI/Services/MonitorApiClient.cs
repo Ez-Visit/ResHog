@@ -29,7 +29,7 @@ public sealed class MonitorApiClient : IDisposable
         _httpClient = new HttpClient
         {
             BaseAddress = new Uri(BaseUrl),
-            Timeout = TimeSpan.FromSeconds(5)
+            Timeout = TimeSpan.FromSeconds(30)
         };
     }
 

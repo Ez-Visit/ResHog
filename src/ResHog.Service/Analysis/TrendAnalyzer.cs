@@ -30,8 +30,9 @@ public class TrendAnalyzer
         var isRaw = QueryHelpers.IsRawTable(table);
         var (valCol, _, _, _) = QueryHelpers.ResolveMetric(metric, isRaw);
 
-        using var conn = new SqliteConnection(_repo.ConnectionString);
-        conn.Open();
+        lock (_repo.ReadLock)
+        {
+            var conn = _repo.GetReadConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT {timeCol} as ts, AVG({valCol}) as val
@@ -53,6 +54,7 @@ public class TrendAnalyzer
             ));
         }
         return results;
+        }
     }
 
     /// <summary>
@@ -71,8 +73,9 @@ public class TrendAnalyzer
         string threadCol = isRaw ? "thread_count" : "0";
         string handleCol = isRaw ? "handle_count" : "0";
 
-        using var conn = new SqliteConnection(_repo.ConnectionString);
-        conn.Open();
+        lock (_repo.ReadLock)
+        {
+            var conn = _repo.GetReadConnection();
 
         // Aggregate stats
         using var cmd = conn.CreateCommand();
@@ -132,5 +135,6 @@ public class TrendAnalyzer
             reader.GetString(2),
             reader.GetString(3)
         );
+        }
     }
 }

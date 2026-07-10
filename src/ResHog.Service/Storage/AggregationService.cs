@@ -33,8 +33,7 @@ public class AggregationService
 
         try
         {
-            using var conn = new SqliteConnection(_repository.ConnectionString);
-            conn.Open();
+            using var conn = _repository.OpenConnection();
 
             // Delete existing aggregation for this minute (idempotent re-run)
             using var delCmd = conn.CreateCommand();
@@ -92,8 +91,7 @@ public class AggregationService
 
         try
         {
-            using var conn = new SqliteConnection(_repository.ConnectionString);
-            conn.Open();
+            using var conn = _repository.OpenConnection();
 
             // Delete existing aggregation for this hour (idempotent re-run)
             using var delCmd = conn.CreateCommand();

@@ -17,14 +17,32 @@ internal static class QueryHelpers
         var now = DateTime.Now;
         return range.ToLowerInvariant() switch
         {
-            "1h" => ("samples", "timestamp", now.AddHours(-1).ToString("o")),
-            "24h" => ("samples_minute", "minute", now.AddHours(-24).ToString("o")),
-            "7d" => ("samples_minute", "minute", now.AddDays(-7).ToString("o")),
-            "30d" => ("samples_minute", "minute", now.AddDays(-30).ToString("o")),
-            "90d" => ("samples_hour", "hour", now.AddDays(-90).ToString("o")),
-            _ => ("samples", "timestamp", now.AddHours(-1).ToString("o"))
+            // Raw samples: timestamp stored as "yyyy-MM-ddTHH:mm:ss.fffffff" (local time, no tz suffix).
+            // A second-granularity 'since' is a prefix of every value in that second, so the
+            // range is inclusive of the boundary second and hits idx_samples_ts.
+            "1h" => ("samples", "timestamp", FloorToSecond(now.AddHours(-1))),
+            // Minute aggregation: minute stored as "yyyy-MM-ddTHH:mm:00".
+            // Floor to the minute boundary so the earliest in-range minute is not excluded
+            // by trailing second digits, and the value matches idx_min_minute exactly.
+            "24h" => ("samples_minute", "minute", FloorToMinute(now.AddHours(-24))),
+            "7d" => ("samples_minute", "minute", FloorToMinute(now.AddDays(-7))),
+            "30d" => ("samples_minute", "minute", FloorToMinute(now.AddDays(-30))),
+            // Hour aggregation: hour stored as "yyyy-MM-ddTHH:00:00".
+            "90d" => ("samples_hour", "hour", FloorToHour(now.AddDays(-90))),
+            _ => ("samples", "timestamp", FloorToSecond(now.AddHours(-1)))
         };
     }
+
+    // samples.timestamp is "yyyy-MM-ddTHH:mm:ss.fffffff"; second-granularity since is a prefix
+    // of every value in that second, so the range is inclusive of the boundary second.
+    private static string FloorToSecond(DateTime dt) => dt.ToString("yyyy-MM-ddTHH:mm:ss");
+
+    // samples_minute.minute is "yyyy-MM-ddTHH:mm:00"; floor to the minute boundary so the
+    // earliest in-range minute is not excluded by the trailing second digits.
+    private static string FloorToMinute(DateTime dt) => dt.ToString("yyyy-MM-ddTHH:mm") + ":00";
+
+    // samples_hour.hour is "yyyy-MM-ddTHH:00:00"; floor to the hour boundary.
+    private static string FloorToHour(DateTime dt) => dt.ToString("yyyy-MM-ddTHH") + ":00:00";
 
     /// <summary>
     /// Returns true when the resolved table is the raw samples table (vs an aggregation table).

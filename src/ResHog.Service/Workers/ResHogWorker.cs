@@ -3,6 +3,8 @@ using ResHog.Analysis;
 using ResHog.Collectors;
 using ResHog.Models;
 using ResHog.Storage;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ResHog.Workers;
 
@@ -22,6 +24,10 @@ public class ResHogWorker : BackgroundService
     private readonly AlertEngine _alertEngine;
     private readonly ResHogOptions _options;
     private readonly ILogger<ResHogWorker> _logger;
+
+    // Guards so a slow background heavy task doesn't overlap the next trigger.
+    private int _purgeBusy;
+    private int _hourAggBusy;
 
     public ResHogWorker(
         SampleCollector collector,
@@ -83,18 +89,38 @@ public class ResHogWorker : BackgroundService
                         lastAggregation = DateTime.Now;
                     }
 
-                    // 5. Periodic retention purge (every 24 hours)
+                    // 5. Periodic retention purge (every 24 hours) — potentially heavy
+                    //    (deletes millions of rows). Offload to the thread-pool so it
+                    //    never blocks the next sampling cycle. WAL + BusyTimeout(5000)
+                    //    in the connection string let this background writer and the
+                    //    loop's BulkInsert serialize safely.
                     if (DateTime.Now - lastRetention > TimeSpan.FromHours(24))
                     {
-                        _retention.PurgeExpiredData();
                         lastRetention = DateTime.Now;
+                        if (Interlocked.CompareExchange(ref _purgeBusy, 1, 0) == 0)
+                        {
+                            _ = Task.Run(() =>
+                            {
+                                try { _retention.PurgeExpiredData(); }
+                                catch (Exception ex) { _logger.LogError(ex, "Retention purge failed (background)"); }
+                                finally { Interlocked.Exchange(ref _purgeBusy, 0); }
+                            });
+                        }
                     }
 
-                    // 6. Periodic hour aggregation (every hour, populates 90-day trend data)
+                    // 6. Periodic hour aggregation (every hour) — offloaded the same way.
                     if (DateTime.Now - lastHourAggregation > TimeSpan.FromHours(1))
                     {
-                        _aggregation.AggregateLastHour();
                         lastHourAggregation = DateTime.Now;
+                        if (Interlocked.CompareExchange(ref _hourAggBusy, 1, 0) == 0)
+                        {
+                            _ = Task.Run(() =>
+                            {
+                                try { _aggregation.AggregateLastHour(); }
+                                catch (Exception ex) { _logger.LogError(ex, "Hour aggregation failed (background)"); }
+                                finally { Interlocked.Exchange(ref _hourAggBusy, 0); }
+                            });
+                        }
                     }
                 }
 

@@ -13,6 +13,13 @@ public class DashboardService
 {
     private readonly SampleRepository _repo;
 
+    // GetProcessNames runs SELECT DISTINCT process_name FROM samples (a multi-million-row
+    // scan). The UI autocomplete calls /api/processes frequently, so cache the result.
+    private List<string>? _cachedProcessNames;
+    private DateTime _processNamesCachedAt;
+    private static readonly TimeSpan ProcessNamesCacheTtl = TimeSpan.FromMinutes(5);
+    private readonly object _processNamesLock = new();
+
     public DashboardService(SampleRepository repo)
     {
         _repo = repo;
@@ -23,8 +30,9 @@ public class DashboardService
     /// </summary>
     public DashboardDto? GetDashboard()
     {
-        using var conn = new SqliteConnection(_repo.ConnectionString);
-        conn.Open();
+        lock (_repo.ReadLock)
+        {
+            var conn = _repo.GetReadConnection();
 
         // Get the latest batch timestamp
         using var tsCmd = conn.CreateCommand();
@@ -98,6 +106,7 @@ public class DashboardService
             DateTime.Parse(latestTs, null, System.Globalization.DateTimeStyles.AssumeLocal),
             system, topCpu, topMem, topIo
         );
+        }
     }
 
     /// <summary>
@@ -106,8 +115,19 @@ public class DashboardService
     /// </summary>
     public List<string> GetProcessNames()
     {
-        using var conn = new SqliteConnection(_repo.ConnectionString);
-        conn.Open();
+        // Serve from cache if still fresh (avoids repeated multi-million-row scans).
+        lock (_processNamesLock)
+        {
+            if (_cachedProcessNames is not null &&
+                DateTime.Now - _processNamesCachedAt < ProcessNamesCacheTtl)
+            {
+                return _cachedProcessNames;
+            }
+        }
+
+        lock (_repo.ReadLock)
+        {
+            var conn = _repo.GetReadConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT DISTINCT process_name FROM samples
@@ -118,6 +138,13 @@ public class DashboardService
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             results.Add(reader.GetString(0));
+
+        lock (_processNamesLock)
+        {
+            _cachedProcessNames = results;
+            _processNamesCachedAt = DateTime.Now;
+        }
         return results;
+        }
     }
 }

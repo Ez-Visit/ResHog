@@ -32,8 +32,7 @@ public class AlertEngine
     /// <returns>Number of new alerts inserted.</returns>
     public int CheckAlerts()
     {
-        using var conn = new SqliteConnection(_repo.ConnectionString);
-        conn.Open();
+        using var conn = _repo.OpenConnection();
 
         // Get the latest batch timestamp
         using var tsCmd = conn.CreateCommand();
@@ -41,8 +40,12 @@ public class AlertEngine
         var latestTs = (string?)tsCmd.ExecuteScalar();
         if (latestTs is null) return 0;
 
-        // Cooldown cutoff: skip if an alert for this process+metric was inserted recently
-        var cooldownTs = DateTime.Now.AddMinutes(-_options.AlertCooldownMin).ToString("o");
+        // Cooldown cutoff: skip if an alert for this process+metric was inserted recently.
+        // MUST match the stored alerts.timestamp format (yyyy-MM-ddTHH:mm:ss.fffffff, no offset),
+        // otherwise the text comparison 'timestamp >= @cooldown' is always false and the
+        // cooldown never fires (duplicate alerts every cycle).
+        var cooldownTs = DateTime.Now.AddMinutes(-_options.AlertCooldownMin)
+            .ToString("yyyy-MM-ddTHH:mm:ss.fffffff");
 
         // Fetch all samples from the latest batch that exceed any threshold
         var candidates = new List<AlertCandidate>();
@@ -140,28 +143,33 @@ public class AlertEngine
     public List<AlertDto> GetAlerts(string range, string severity)
     {
         var now = DateTime.Now;
+        // Match the stored alerts.timestamp format (no offset) so the text range
+        // comparison in WHERE timestamp >= @since works correctly.
+        const string sinceFmt = "yyyy-MM-ddTHH:mm:ss.fffffff";
         var since = range.ToLowerInvariant() switch
         {
-            "1h" => now.AddHours(-1).ToString("o"),
-            "7d" => now.AddDays(-7).ToString("o"),
-            "30d" => now.AddDays(-30).ToString("o"),
-            _ => now.AddHours(-24).ToString("o")
+            "1h" => now.AddHours(-1).ToString(sinceFmt),
+            "7d" => now.AddDays(-7).ToString(sinceFmt),
+            "30d" => now.AddDays(-30).ToString(sinceFmt),
+            _ => now.AddHours(-24).ToString(sinceFmt)
         };
 
         var severityClause = severity.ToLowerInvariant() switch
         {
             "warning" => " AND severity = 'warning'",
             "critical" => " AND severity = 'critical'",
+            "info" => " AND severity = 'info'",
             _ => ""
         };
 
-        using var conn = new SqliteConnection(_repo.ConnectionString);
-        conn.Open();
+        lock (_repo.ReadLock)
+        {
+            var conn = _repo.GetReadConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT id, timestamp, process_name, pid, service_name,
                    metric, value, threshold, severity, resolved
-            FROM alerts
+            FROM alerts INDEXED BY idx_alerts_ts_severity
             WHERE timestamp >= @since{severityClause}
             ORDER BY timestamp DESC
             LIMIT 200
@@ -186,6 +194,7 @@ public class AlertEngine
             ));
         }
         return results;
+        }
     }
 
     /// <summary>

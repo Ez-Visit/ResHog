@@ -113,7 +113,19 @@ Write-Host "    -> Auto-restart on crash (30s/60s/120s)"
 # 7. Start service
 Write-Host "[6/7] Starting service..." -ForegroundColor Green
 sc.exe start $ServiceName | Out-Null
-Start-Sleep -Seconds 3
+
+# Poll for up to 30s. Service init (DB load + Kestrel bind) can exceed a
+# fixed 3s wait on large databases, leaving the status StartPending. Only
+# treat Stopped as a real failure; tolerate StartPending until Running.
+$started = $false
+$pollSeconds = 30
+for ($i = 0; $i -lt $pollSeconds; $i++) {
+    Start-Sleep -Seconds 1
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($null -eq $svc) { continue }
+    if ($svc.Status -eq "Running") { $started = $true; break }
+    if ($svc.Status -eq "Stopped") { break }
+}
 
 $status = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
 if ($status -eq "Running") {

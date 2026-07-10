@@ -28,23 +28,23 @@ public static class ApiEndpoints
         // GET /api/health
         // Returns service status, uptime, and basic stats.
         // ---------------------------------------------------------------
-        group.MapGet("/health", (SampleRepository repo, DashboardService dashboard) =>
+        group.MapGet("/health", (SampleRepository repo) =>
         {
+            // Lightweight liveness probe. Previously this ran COUNT(*) on the full
+            // raw-samples table (tens of millions of rows) plus a full GetDashboard on
+            // EVERY poll (the UI polls health every few seconds), causing recurring
+            // 600-800ms latencies that also contended with DB writes. Stats are now
+            // served from a 60s cache (see SampleRepository.GetHealthStats).
             var uptime = DateTime.Now - StartTime;
-            var sampleCount = repo.GetSampleCount();
-            var monitored = 0;
-
-            var dash = dashboard.GetDashboard();
-            if (dash is not null)
-                monitored = dash.System.TotalProcesses;
+            var stats = repo.GetHealthStats();
 
             return Results.Ok(new HealthDto(
                 "running",
                 StartTime,
                 (long)uptime.TotalSeconds,
-                sampleCount,
-                monitored,
-                "0.2.0-alpha"
+                stats.SampleCount,
+                stats.MonitoredProcesses,
+                "0.2.0"
             ));
         })
         .WithName("Health")

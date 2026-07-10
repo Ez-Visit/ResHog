@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using ResHog.Models;
+using System.Data;
 
 namespace ResHog.Storage;
 
@@ -12,6 +13,61 @@ public class SampleRepository
     private readonly string _connectionString;
 
     public string ConnectionString => _connectionString;
+
+    // --- Shared read connection (P3-2) -----------------------------------
+    // WAL mode allows one writer + many readers across separate connections.
+    // We keep ONE long-lived read connection and serialize all read access
+    // with a lock (a SqliteConnection is not thread-safe for concurrent
+    // use). Reusing the same connection lets SQLite cache the compiled
+    // query plans across API calls instead of re-preparing each request.
+    // Writers (BulkInsert / Aggregation / Retention) use their OWN
+    // connections and do NOT take this lock, so reads and writes stay
+    // concurrent. Do NOT Dispose() the returned connection.
+    private SqliteConnection? _readConn;
+    private readonly object _readLock = new();
+
+    /// <summary>Lock that must surround every use of <see cref="GetReadConnection"/>.</summary>
+    public object ReadLock => _readLock;
+
+    /// <summary>
+    /// Opens a SQLite connection and applies the shared per-connection PRAGMAs.
+    /// <c>busy_timeout</c> MUST be set this way (not via the connection string):
+    /// Microsoft.Data.Sqlite does not recognize the <c>BusyTimeout</c> keyword
+    /// (that belongs to the separate System.Data.SQLite library) and throws
+    /// "Connection string keyword 'busytimeout' is not supported" at open time,
+    /// which previously crashed service startup. busy_timeout lets concurrent
+    /// writers under WAL wait instead of immediately failing with SQLITE_BUSY.
+    /// Writers (BulkInsert / Aggregation / Retention / AlertEngine) and the
+    /// shared read connection all go through this method for consistent behavior.
+    /// </summary>
+    public SqliteConnection OpenConnection()
+    {
+        var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        conn.ExecuteNonQuery("PRAGMA busy_timeout = 5000;");
+        return conn;
+    }
+
+
+    /// <summary>
+    /// Returns a guaranteed-open read connection. Callers MUST access it inside
+    /// <c>lock (_repo.ReadLock)</c> and must NOT dispose it (it is reused).
+    /// </summary>
+    public SqliteConnection GetReadConnection()
+    {
+        lock (_readLock)
+        {
+            if (_readConn is null)
+            {
+                _readConn = OpenConnection();
+            }
+            else if (_readConn.State != ConnectionState.Open)
+            {
+                _readConn.Open();
+            }
+            return _readConn;
+        }
+    }
 
     public SampleRepository(string dbPath)
     {
@@ -26,8 +82,7 @@ public class SampleRepository
 
     private void InitializeDatabase()
     {
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
+        using var conn = OpenConnection();
 
         // auto_vacuum MUST be the first PRAGMA on a fresh database.
         // Setting journal_mode=WAL first writes the file header, which locks
@@ -39,19 +94,27 @@ public class SampleRepository
         conn.ExecuteNonQuery("PRAGMA synchronous = NORMAL;");
         // 64MB page cache (negative value = KB)
         conn.ExecuteNonQuery("PRAGMA cache_size = -64000;");
+        // Smaller, more frequent WAL checkpoints (default 1000 pages) keep the WAL
+        // file from growing large between checkpoints under frequent bulk inserts.
+        conn.ExecuteNonQuery("PRAGMA wal_autocheckpoint = 200;");
 
         conn.ExecuteNonQuery(SchemaSql);
     }
 
     /// <summary>
     /// Bulk insert all samples in a single transaction to minimize fsync overhead.
+    /// Parameters are created once and only their .Value is reassigned per row, so we
+    /// avoid re-allocating parameter objects every row (previously Clear()+AddWithValue
+    /// ~7200x/cycle). The batch timestamp is formatted once, not per row.
     /// </summary>
     public void BulkInsert(List<ProcessSample> samples)
     {
         if (samples.Count == 0) return;
 
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
+        // All samples in one Collect() share the same timestamp — format it once.
+        var tsText = samples[0].Timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffffff");
+
+        using var conn = OpenConnection();
         using var transaction = conn.BeginTransaction();
 
         using var cmd = conn.CreateCommand();
@@ -72,27 +135,45 @@ public class SampleRepository
             )
             """;
 
+        // Create the 18 parameters once; reuse for every row.
+        var pTs     = cmd.Parameters.AddWithValue("@ts",     tsText);
+        var pPid    = cmd.Parameters.AddWithValue("@pid",    0);
+        var pInst   = cmd.Parameters.AddWithValue("@inst",   "");
+        var pPname  = cmd.Parameters.AddWithValue("@pname",  "");
+        var pCpu    = cmd.Parameters.AddWithValue("@cpu",    0f);
+        var pCpuu   = cmd.Parameters.AddWithValue("@cpuu",   0f);
+        var pCpuk   = cmd.Parameters.AddWithValue("@cpuk",   0f);
+        var pWs     = cmd.Parameters.AddWithValue("@ws",     0f);
+        var pWsp    = cmd.Parameters.AddWithValue("@wsp",    0f);
+        var pPb     = cmd.Parameters.AddWithValue("@pb",     0f);
+        var pVb     = cmd.Parameters.AddWithValue("@vb",     0f);
+        var pIor    = cmd.Parameters.AddWithValue("@ior",    0f);
+        var pIow    = cmd.Parameters.AddWithValue("@iow",    0f);
+        var pIorops = cmd.Parameters.AddWithValue("@iorops", 0f);
+        var pIowops = cmd.Parameters.AddWithValue("@iowops", 0f);
+        var pTc     = cmd.Parameters.AddWithValue("@tc",     0);
+        var pHc     = cmd.Parameters.AddWithValue("@hc",     0);
+        var pSvc    = cmd.Parameters.AddWithValue("@svc",    "");
+
         foreach (var s in samples)
         {
-            cmd.Parameters.Clear();
-            cmd.Parameters.AddWithValue("@ts", s.Timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffffff"));
-            cmd.Parameters.AddWithValue("@pid", s.Pid);
-            cmd.Parameters.AddWithValue("@inst", s.InstanceName ?? "");
-            cmd.Parameters.AddWithValue("@pname", s.ProcessName ?? "");
-            cmd.Parameters.AddWithValue("@cpu", s.CpuPercent);
-            cmd.Parameters.AddWithValue("@cpuu", s.CpuUser);
-            cmd.Parameters.AddWithValue("@cpuk", s.CpuKernel);
-            cmd.Parameters.AddWithValue("@ws", s.WorkingSetMb);
-            cmd.Parameters.AddWithValue("@wsp", s.WorkingSetPrivateMb);
-            cmd.Parameters.AddWithValue("@pb", s.PrivateBytesMb);
-            cmd.Parameters.AddWithValue("@vb", s.VirtualBytesMb);
-            cmd.Parameters.AddWithValue("@ior", s.IoReadMbPerSec);
-            cmd.Parameters.AddWithValue("@iow", s.IoWriteMbPerSec);
-            cmd.Parameters.AddWithValue("@iorops", s.IoReadOpsPerSec);
-            cmd.Parameters.AddWithValue("@iowops", s.IoWriteOpsPerSec);
-            cmd.Parameters.AddWithValue("@tc", s.ThreadCount);
-            cmd.Parameters.AddWithValue("@hc", s.HandleCount);
-            cmd.Parameters.AddWithValue("@svc", (object?)s.ServiceName ?? DBNull.Value);
+            pPid.Value    = s.Pid;
+            pInst.Value   = s.InstanceName ?? "";
+            pPname.Value  = s.ProcessName ?? "";
+            pCpu.Value    = s.CpuPercent;
+            pCpuu.Value   = s.CpuUser;
+            pCpuk.Value   = s.CpuKernel;
+            pWs.Value     = s.WorkingSetMb;
+            pWsp.Value    = s.WorkingSetPrivateMb;
+            pPb.Value     = s.PrivateBytesMb;
+            pVb.Value     = s.VirtualBytesMb;
+            pIor.Value    = s.IoReadMbPerSec;
+            pIow.Value    = s.IoWriteMbPerSec;
+            pIorops.Value = s.IoReadOpsPerSec;
+            pIowops.Value = s.IoWriteOpsPerSec;
+            pTc.Value     = s.ThreadCount;
+            pHc.Value     = s.HandleCount;
+            pSvc.Value    = (object?)s.ServiceName ?? DBNull.Value;
             cmd.ExecuteNonQuery();
         }
 
@@ -100,15 +181,59 @@ public class SampleRepository
     }
 
     /// <summary>
-    /// Get the total number of raw samples in the database (for diagnostics).
+    /// Lightweight, cached statistics for the /api/health endpoint.
+    /// The raw-sample COUNT(*) is a full table scan (tens of millions of rows), so it
+    /// must NOT run on every health poll (every few seconds). Results are cached for
+    /// <see cref="HealthStatsTtl"/> and refreshed lazily.
     /// </summary>
-    public long GetSampleCount()
+    private (long SampleCount, int MonitoredProcesses)? _cachedHealthStats;
+    private DateTime _healthStatsCachedAt;
+    private static readonly TimeSpan HealthStatsTtl = TimeSpan.FromSeconds(60);
+    private readonly object _healthStatsLock = new();
+
+    public (long SampleCount, int MonitoredProcesses) GetHealthStats()
     {
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM samples";
-        return (long)cmd.ExecuteScalar()!;
+        lock (_healthStatsLock)
+        {
+            if (_cachedHealthStats.HasValue &&
+                DateTime.Now - _healthStatsCachedAt < HealthStatsTtl)
+            {
+                return _cachedHealthStats.Value;
+            }
+        }
+
+        long sampleCount;
+        int monitored;
+        lock (_readLock)
+        {
+            var conn = GetReadConnection();
+
+            // Total raw samples: full scan, but only runs at most once per HealthStatsTtl.
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT COUNT(*) FROM samples";
+                sampleCount = (long)cmd.ExecuteScalar()!;
+            }
+
+            // Monitored processes = distinct process names in the most recent batch.
+            // MAX(timestamp) uses idx_samples_ts; the equality seek on timestamp then
+            // returns exactly one batch (~hundreds of rows), so COUNT is instant.
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = """
+                    SELECT COUNT(*) FROM samples
+                    WHERE timestamp = (SELECT MAX(timestamp) FROM samples)
+                    """;
+                monitored = Convert.ToInt32(cmd.ExecuteScalar());
+            }
+        }
+
+        lock (_healthStatsLock)
+        {
+            _cachedHealthStats = (sampleCount, monitored);
+            _healthStatsCachedAt = DateTime.Now;
+            return _cachedHealthStats.Value;
+        }
     }
 
     /// <summary>

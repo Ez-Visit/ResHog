@@ -35,8 +35,7 @@ public class RetentionService
 
         try
         {
-            using var conn = new SqliteConnection(_repository.ConnectionString);
-            conn.Open();
+            using var conn = _repository.OpenConnection();
 
             // 1. Raw data: retain N days
             var rawCutoff = now.AddDays(-_options.Retention.RawDataDays).ToString("yyyy-MM-ddTHH:mm:ss.fffffff");
@@ -70,6 +69,10 @@ public class RetentionService
 
             // 5. Reclaim space incrementally (requires auto_vacuum=INCREMENTAL set at DB creation)
             conn.ExecuteNonQuery("PRAGMA incremental_vacuum;");
+
+            // 6. Refresh the query planner's statistics so it keeps picking the best
+            // index as the tables grow (cheap; only analyzes tables that need it).
+            conn.ExecuteNonQuery("PRAGMA optimize;");
 
             _logger.LogInformation(
                 "Retention purge complete: {Raw} raw, {Min} minute, {Hour} hour, {Alert} alert rows deleted",

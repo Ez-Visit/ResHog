@@ -7,7 +7,7 @@
     <AssemblyName>ResHog.Service</AssemblyName>
     <RootNamespace>ResHog</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Company>ResHog</Company>
     <Product>ResHog - Windows Resource Monitor</Product>
     <Description>Long-running Windows resource monitor that identifies resource-heavy applications and services.</Description>
