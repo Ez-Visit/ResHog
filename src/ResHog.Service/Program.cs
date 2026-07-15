@@ -88,17 +88,67 @@ try
         options.SerializerOptions.TypeInfoResolver = ApiJsonContext.Default;
     });
 
+    // Required for per-request SQL timing propagation via HttpContext.Items.
+    builder.Services.AddHttpContextAccessor();
+
     // --- Configure Kestrel: localhost-only for security (no network exposure) ---
     var apiPort = builder.Configuration.GetValue<int>($"{ResHogOptions.SectionName}:Api:Port", 5180);
     builder.WebHost.ConfigureKestrel(serverOptions =>
     {
         serverOptions.ListenLocalhost(apiPort);
+        serverOptions.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(2);
+        serverOptions.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
+    });
+
+    // Global request timeout: any API call exceeding 30s gets a 408 response.
+    // This prevents a hung SQLite query from keeping the connection open forever.
+    builder.Services.AddRequestTimeouts(options =>
+    {
+        options.DefaultPolicy = new() { Timeout = TimeSpan.FromSeconds(30) };
     });
 
     var app = builder.Build();
 
+    // --- Request timing middleware ---
+    // Adds X-Processing-Time-Ms and X-Db-Query-Time-Ms response headers to every
+    // API call so the client can display actual server-side timing breakdown.
+    // Also logs any API request that takes more than 200ms.
+    // Note: headers must be registered via OnStarting (before response starts)
+    // because by the time await next() returns, headers may already be sent.
+    app.Use(async (context, next) =>
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        context.Response.OnStarting(() =>
+        {
+            sw.Stop();
+            context.Response.Headers["X-Processing-Time-Ms"] = sw.ElapsedMilliseconds.ToString();
+            if (context.Items.TryGetValue("db_time_ms", out var dbObj) && dbObj is long dbVal)
+            {
+                context.Response.Headers["X-Db-Query-Time-Ms"] = dbVal.ToString();
+            }
+            return Task.CompletedTask;
+        });
+
+        await next(context);
+
+        // Log slow requests after completion (header injection already happened via OnStarting).
+        if (sw.ElapsedMilliseconds > 200)
+        {
+            var dbMs = context.Items.TryGetValue("db_time_ms", out var dbObj2) && dbObj2 is long dbVal2 ? dbVal2 : 0;
+            var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning(
+                "Slow API request: {Method} {Path} took {Ms}ms (status {Status}, db {DbMs}ms)",
+                context.Request.Method, context.Request.Path,
+                sw.ElapsedMilliseconds, context.Response.StatusCode, dbMs);
+        }
+    });
+
     // --- Minimal API endpoints ---
     app.MapApiEndpoints();
+
+    // Request timeout middleware must come after endpoints but before Run().
+    app.UseRequestTimeouts();
 
     if (isConsoleMode)
     {

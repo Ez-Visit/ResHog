@@ -11,10 +11,21 @@ namespace ResHog.Analysis;
 public class TopNAnalyzer
 {
     private readonly SampleRepository _repo;
+    private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
 
-    public TopNAnalyzer(SampleRepository repo)
+    public TopNAnalyzer(SampleRepository repo, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext)
     {
         _repo = repo;
+        _httpContext = httpContext;
+    }
+
+    private void RecordDbTime(long ms)
+    {
+        if (_httpContext.HttpContext is { } ctx)
+        {
+            var current = ctx.Items.TryGetValue("db_time_ms", out var v) && v is long cur ? cur : 0L;
+            ctx.Items["db_time_ms"] = current + ms;
+        }
     }
 
     /// <summary>
@@ -31,9 +42,8 @@ public class TopNAnalyzer
         var isRaw = QueryHelpers.IsRawTable(table);
         var (valCol, secCol, unit, name) = QueryHelpers.ResolveMetric(metric, isRaw);
 
-        lock (_repo.ReadLock)
-        {
-            var conn = _repo.GetReadConnection();
+        using var conn = _repo.OpenConnection();
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
         using var cmd = conn.CreateCommand();
 
         // CRITICAL perf hint. This query groups by process_name over a time RANGE
@@ -45,7 +55,7 @@ public class TopNAnalyzer
         // idx_samples_ts) lets the range become a SEEK instead, cutting the scan to
         // only the in-range rows (~6x faster, identical Top-N results). We pin it
         // explicitly because the cost model otherwise chooses the wrong plan.
-        var indexHint = isRaw ? "idx_samples_ts" : "idx_min_minute";
+        var indexHint = isRaw ? "idx_samples_ts" : "idx_min_name_minute";
         cmd.CommandText = $"""
             SELECT process_name,
                    MAX(service_name) as service_name,
@@ -76,7 +86,8 @@ public class TopNAnalyzer
                 unit, name
             ));
         }
+        dbSw.Stop();
+        RecordDbTime(dbSw.ElapsedMilliseconds);
         return results;
-        }
     }
 }

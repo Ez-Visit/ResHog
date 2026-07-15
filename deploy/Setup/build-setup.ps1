@@ -7,7 +7,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $root
 $root = Split-Path -Parent $root
 
-$release = "$root\artifacts\release\ResHog-0.2.0-win-x64"
+$release = "$root\artifacts\release\ResHog-0.2.1-win-x64"
 $payload = "$root\deploy\SetupUI\Payload"
 $zip = "$root\deploy\SetupUI\Payload.zip"
 

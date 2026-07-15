@@ -63,7 +63,9 @@ public partial class AlertViewModel : ViewModelBase
         {
             var severity = SelectedSeverity == "all" ? null : SelectedSeverity;
             var data = await _apiClient.GetAlertsAsync(SelectedRange, severity);
+            var t = _apiClient.LastTiming;
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             Alerts.Clear();
             if (data != null)
             {
@@ -80,6 +82,13 @@ public partial class AlertViewModel : ViewModelBase
                 CriticalCount = 0;
                 WarningCount = 0;
             }
+            sw.Stop();
+
+            ApiMs = t.NetworkMs;
+            ServerMs = t.ServerMs;
+            DbMs = t.DbMs;
+            RenderMs = sw.ElapsedMilliseconds;
+            _apiClient.SetTiming(t.NetworkMs, t.ServerMs, t.DbMs, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {

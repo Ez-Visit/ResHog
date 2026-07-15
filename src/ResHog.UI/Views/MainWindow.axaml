@@ -59,10 +59,11 @@
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
                     <TextBlock Text="{Binding ResponseTimeText}"
-                               FontSize="11"
-                               Foreground="#666"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#555"
                                VerticalAlignment="Center" />
-                    <TextBlock Text="ResHog v0.2.0"
+                    <TextBlock Text="ResHog v0.2.1"
                                FontSize="11"
                                Foreground="#999"
                                VerticalAlignment="Center" />

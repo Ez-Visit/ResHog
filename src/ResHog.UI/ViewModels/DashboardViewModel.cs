@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ResHog.Shared.Dtos;
@@ -13,9 +14,6 @@ public partial class DashboardViewModel : ViewModelBase
 
     [ObservableProperty]
     private DateTime _lastUpdate;
-
-    [ObservableProperty]
-    private long _lastResponseTimeMs;
 
     [ObservableProperty]
     private double _cpuPercent;
@@ -77,8 +75,19 @@ public partial class DashboardViewModel : ViewModelBase
                 var dto = await _apiClient.GetDashboardAsync();
                 if (dto != null)
                 {
+                    // Snapshot timing immediately after the API call returns.
+                    var t = _apiClient.LastTiming;
+
+                    // Measure render time: property updates + ObservableCollection rebuild.
+                    var renderSw = Stopwatch.StartNew();
                     UpdateFromDto(dto);
-                    LastResponseTimeMs = _apiClient.LastResponseTimeMs;
+                    renderSw.Stop();
+
+                    ApiMs = t.NetworkMs;
+                    ServerMs = t.ServerMs;
+                    DbMs = t.DbMs;
+                    RenderMs = renderSw.ElapsedMilliseconds;
+                    _apiClient.SetTiming(t.NetworkMs, t.ServerMs, t.DbMs, renderSw.ElapsedMilliseconds);
                     LastError = null;
                 }
             }

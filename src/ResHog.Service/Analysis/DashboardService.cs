@@ -12,6 +12,7 @@ namespace ResHog.Analysis;
 public class DashboardService
 {
     private readonly SampleRepository _repo;
+    private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
 
     // GetProcessNames runs SELECT DISTINCT process_name FROM samples (a multi-million-row
     // scan). The UI autocomplete calls /api/processes frequently, so cache the result.
@@ -20,9 +21,23 @@ public class DashboardService
     private static readonly TimeSpan ProcessNamesCacheTtl = TimeSpan.FromMinutes(5);
     private readonly object _processNamesLock = new();
 
-    public DashboardService(SampleRepository repo)
+    public DashboardService(SampleRepository repo, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext)
     {
         _repo = repo;
+        _httpContext = httpContext;
+    }
+
+    /// <summary>
+    /// Records elapsed SQL time (ms) into the current HttpContext.Items["db_time_ms"]
+    /// so the middleware can attach X-Db-Query-Time-Ms to the response.
+    /// </summary>
+    private void RecordDbTime(long ms)
+    {
+        if (_httpContext.HttpContext is { } ctx)
+        {
+            var current = ctx.Items.TryGetValue("db_time_ms", out var v) && v is long cur ? cur : 0L;
+            ctx.Items["db_time_ms"] = current + ms;
+        }
     }
 
     /// <summary>
@@ -30,9 +45,8 @@ public class DashboardService
     /// </summary>
     public DashboardDto? GetDashboard()
     {
-        lock (_repo.ReadLock)
-        {
-            var conn = _repo.GetReadConnection();
+        using var conn = _repo.OpenConnection();
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
 
         // Get the latest batch timestamp
         using var tsCmd = conn.CreateCommand();
@@ -83,6 +97,9 @@ public class DashboardService
             }
         }
 
+        dbSw.Stop();
+        RecordDbTime(dbSw.ElapsedMilliseconds);
+
         if (samples.Count == 0) return null;
 
         var system = new SystemOverviewDto(
@@ -106,7 +123,6 @@ public class DashboardService
             DateTime.Parse(latestTs, null, System.Globalization.DateTimeStyles.AssumeLocal),
             system, topCpu, topMem, topIo
         );
-        }
     }
 
     /// <summary>
@@ -125,9 +141,8 @@ public class DashboardService
             }
         }
 
-        lock (_repo.ReadLock)
-        {
-            var conn = _repo.GetReadConnection();
+        using var conn = _repo.OpenConnection();
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT DISTINCT process_name FROM samples
@@ -138,6 +153,8 @@ public class DashboardService
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             results.Add(reader.GetString(0));
+        dbSw.Stop();
+        RecordDbTime(dbSw.ElapsedMilliseconds);
 
         lock (_processNamesLock)
         {
@@ -145,6 +162,5 @@ public class DashboardService
             _processNamesCachedAt = DateTime.Now;
         }
         return results;
-        }
     }
 }

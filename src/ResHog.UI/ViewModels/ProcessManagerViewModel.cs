@@ -150,6 +150,10 @@ public partial class ProcessManagerViewModel : ViewModelBase
         try
         {
             var results = await _apiClient.SearchProcessesAsync(SearchQuery);
+            var t = _apiClient.LastTiming;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             if (results != null)
             {
                 // Replace old results (avoid flicker from Clear+Add loop)
@@ -168,6 +172,13 @@ public partial class ProcessManagerViewModel : ViewModelBase
             {
                 SetError("搜索失败，服务未响应。");
             }
+            sw.Stop();
+
+            ApiMs = t.NetworkMs;
+            ServerMs = t.ServerMs;
+            DbMs = t.DbMs;
+            RenderMs = sw.ElapsedMilliseconds;
+            _apiClient.SetTiming(t.NetworkMs, t.ServerMs, t.DbMs, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {

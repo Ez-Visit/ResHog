@@ -18,9 +18,6 @@
                            FontSize="12" Foreground="#888" VerticalAlignment="Center">
                     <Run Text="最后更新: " />
                     <Run Text="{Binding LastUpdate, StringFormat='{}{0:HH:mm:ss}'}" />
-                    <Run Text=" (" />
-                    <Run Text="{Binding LastResponseTimeMs}" />
-                    <Run Text="ms)" />
                 </TextBlock>
             </Grid>
 

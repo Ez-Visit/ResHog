@@ -12,10 +12,21 @@ namespace ResHog.Analysis;
 public class TrendAnalyzer
 {
     private readonly SampleRepository _repo;
+    private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
 
-    public TrendAnalyzer(SampleRepository repo)
+    public TrendAnalyzer(SampleRepository repo, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext)
     {
         _repo = repo;
+        _httpContext = httpContext;
+    }
+
+    private void RecordDbTime(long ms)
+    {
+        if (_httpContext.HttpContext is { } ctx)
+        {
+            var current = ctx.Items.TryGetValue("db_time_ms", out var v) && v is long cur ? cur : 0L;
+            ctx.Items["db_time_ms"] = current + ms;
+        }
     }
 
     /// <summary>
@@ -30,9 +41,8 @@ public class TrendAnalyzer
         var isRaw = QueryHelpers.IsRawTable(table);
         var (valCol, _, _, _) = QueryHelpers.ResolveMetric(metric, isRaw);
 
-        lock (_repo.ReadLock)
-        {
-            var conn = _repo.GetReadConnection();
+        using var conn = _repo.OpenConnection();
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT {timeCol} as ts, AVG({valCol}) as val
@@ -53,8 +63,9 @@ public class TrendAnalyzer
                 Math.Round(reader.GetDouble(1), 2)
             ));
         }
+        dbSw.Stop();
+        RecordDbTime(dbSw.ElapsedMilliseconds);
         return results;
-        }
     }
 
     /// <summary>
@@ -73,9 +84,8 @@ public class TrendAnalyzer
         string threadCol = isRaw ? "thread_count" : "0";
         string handleCol = isRaw ? "handle_count" : "0";
 
-        lock (_repo.ReadLock)
-        {
-            var conn = _repo.GetReadConnection();
+        using var conn = _repo.OpenConnection();
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
 
         // Aggregate stats
         using var cmd = conn.CreateCommand();
@@ -119,6 +129,9 @@ public class TrendAnalyzer
                 pids.Add(pidReader.GetInt32(0));
         }
 
+        dbSw.Stop();
+        RecordDbTime(dbSw.ElapsedMilliseconds);
+
         return new ProcessDetailDto(
             name,
             reader.IsDBNull(0) ? null : reader.GetString(0),
@@ -135,6 +148,5 @@ public class TrendAnalyzer
             reader.GetString(2),
             reader.GetString(3)
         );
-        }
     }
 }

@@ -56,12 +56,22 @@ public partial class TopNViewModel : ViewModelBase
         try
         {
             var data = await _apiClient.GetTopNAsync(SelectedMetric, Limit, SelectedRange);
+            var t = _apiClient.LastTiming;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             Results.Clear();
             if (data != null)
             {
                 foreach (var item in data)
                     Results.Add(item);
             }
+            sw.Stop();
+
+            ApiMs = t.NetworkMs;
+            ServerMs = t.ServerMs;
+            DbMs = t.DbMs;
+            RenderMs = sw.ElapsedMilliseconds;
+            _apiClient.SetTiming(t.NetworkMs, t.ServerMs, t.DbMs, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {

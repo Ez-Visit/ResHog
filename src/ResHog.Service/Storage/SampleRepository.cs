@@ -14,31 +14,20 @@ public class SampleRepository
 
     public string ConnectionString => _connectionString;
 
-    // --- Shared read connection (P3-2) -----------------------------------
-    // WAL mode allows one writer + many readers across separate connections.
-    // We keep ONE long-lived read connection and serialize all read access
-    // with a lock (a SqliteConnection is not thread-safe for concurrent
-    // use). Reusing the same connection lets SQLite cache the compiled
-    // query plans across API calls instead of re-preparing each request.
-    // Writers (BulkInsert / Aggregation / Retention) use their OWN
-    // connections and do NOT take this lock, so reads and writes stay
-    // concurrent. Do NOT Dispose() the returned connection.
-    private SqliteConnection? _readConn;
-    private readonly object _readLock = new();
-
-    /// <summary>Lock that must surround every use of <see cref="GetReadConnection"/>.</summary>
-    public object ReadLock => _readLock;
-
     /// <summary>
     /// Opens a SQLite connection and applies the shared per-connection PRAGMAs.
     /// <c>busy_timeout</c> MUST be set this way (not via the connection string):
     /// Microsoft.Data.Sqlite does not recognize the <c>BusyTimeout</c> keyword
     /// (that belongs to the separate System.Data.SQLite library) and throws
-    /// "Connection string keyword 'busytimeout' is not supported" at open time,
-    /// which previously crashed service startup. busy_timeout lets concurrent
-    /// writers under WAL wait instead of immediately failing with SQLITE_BUSY.
-    /// Writers (BulkInsert / Aggregation / Retention / AlertEngine) and the
-    /// shared read connection all go through this method for consistent behavior.
+    /// "Connection string keyword 'busytimeout' is not supported" at open time.
+    /// busy_timeout lets concurrent writers under WAL wait instead of immediately
+    /// failing with SQLITE_BUSY.
+    ///
+    /// Every caller (API reads, BulkInsert, Aggregation, Retention, AlertEngine)
+    /// opens its OWN connection via this method — there is no shared read connection.
+    /// Under WAL mode one writer + multiple concurrent readers are safe, and .NET's
+    /// SQLite connection pool (`Pooling=true` in the connection string) reuses
+    /// physical connections transparently.
     /// </summary>
     public SqliteConnection OpenConnection()
     {
@@ -46,27 +35,6 @@ public class SampleRepository
         conn.Open();
         conn.ExecuteNonQuery("PRAGMA busy_timeout = 5000;");
         return conn;
-    }
-
-
-    /// <summary>
-    /// Returns a guaranteed-open read connection. Callers MUST access it inside
-    /// <c>lock (_repo.ReadLock)</c> and must NOT dispose it (it is reused).
-    /// </summary>
-    public SqliteConnection GetReadConnection()
-    {
-        lock (_readLock)
-        {
-            if (_readConn is null)
-            {
-                _readConn = OpenConnection();
-            }
-            else if (_readConn.State != ConnectionState.Open)
-            {
-                _readConn.Open();
-            }
-            return _readConn;
-        }
     }
 
     public SampleRepository(string dbPath)
@@ -78,6 +46,11 @@ public class SampleRepository
 
         _connectionString = $"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=true";
         InitializeDatabase();
+
+        // Seed health cache with (0, 0) so the first health poll never triggers
+        // a full-table COUNT(*) scan — that only runs after the first PollInterval.
+        _cachedHealthStats = (0, 0);
+        _healthStatsCachedAt = DateTime.Now;
     }
 
     private void InitializeDatabase()
@@ -93,7 +66,7 @@ public class SampleRepository
         // NORMAL is safe in WAL mode and significantly faster than FULL
         conn.ExecuteNonQuery("PRAGMA synchronous = NORMAL;");
         // 64MB page cache (negative value = KB)
-        conn.ExecuteNonQuery("PRAGMA cache_size = -64000;");
+        conn.ExecuteNonQuery("PRAGMA cache_size = -128000;");
         // Smaller, more frequent WAL checkpoints (default 1000 pages) keep the WAL
         // file from growing large between checkpoints under frequent bulk inserts.
         conn.ExecuteNonQuery("PRAGMA wal_autocheckpoint = 200;");
@@ -182,17 +155,34 @@ public class SampleRepository
 
     /// <summary>
     /// Lightweight, cached statistics for the /api/health endpoint.
-    /// The raw-sample COUNT(*) is a full table scan (tens of millions of rows), so it
-    /// must NOT run on every health poll (every few seconds). Results are cached for
-    /// <see cref="HealthStatsTtl"/> and refreshed lazily.
+    /// The worker calls <see cref="UpdateHealthCache"/> after each BulkInsert
+    /// so the cache stays fresh without a full-table scan. The lazy refresh
+    /// (SELECT COUNT(*) FROM samples) is only a safety net if no worker updates
+    /// arrive for an extended period.
     /// </summary>
     private (long SampleCount, int MonitoredProcesses)? _cachedHealthStats;
     private DateTime _healthStatsCachedAt;
     private static readonly TimeSpan HealthStatsTtl = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan HealthStatsFallbackTtl = TimeSpan.FromMinutes(5);
     private readonly object _healthStatsLock = new();
+
+    /// <summary>
+    /// Called by the background worker after each successful BulkInsert to push
+    /// the latest total sample count and monitored-process count into the cache
+    /// without triggering a full-table COUNT(*).
+    /// </summary>
+    public void UpdateHealthCache(long sampleCount, int monitoredProcesses)
+    {
+        lock (_healthStatsLock)
+        {
+            _cachedHealthStats = (sampleCount, monitoredProcesses);
+            _healthStatsCachedAt = DateTime.Now;
+        }
+    }
 
     public (long SampleCount, int MonitoredProcesses) GetHealthStats()
     {
+        // Fast path: cache is fresh (pushed by worker)
         lock (_healthStatsLock)
         {
             if (_cachedHealthStats.HasValue &&
@@ -202,22 +192,40 @@ public class SampleRepository
             }
         }
 
+        // Slow path: cache is stale — query DB.
+        // Only do the full COUNT(*) if the cache is really old (beyond fallback TTL)
+        // so rare worker pauses don't trigger expensive scans.
+        bool doFullScan;
+        lock (_healthStatsLock)
+        {
+            doFullScan = !_cachedHealthStats.HasValue ||
+                DateTime.Now - _healthStatsCachedAt >= HealthStatsFallbackTtl;
+        }
+
         long sampleCount;
         int monitored;
-        lock (_readLock)
+        using (var conn = OpenConnection())
         {
-            var conn = GetReadConnection();
-
-            // Total raw samples: full scan, but only runs at most once per HealthStatsTtl.
-            using (var cmd = conn.CreateCommand())
+            if (doFullScan)
             {
-                cmd.CommandText = "SELECT COUNT(*) FROM samples";
-                sampleCount = (long)cmd.ExecuteScalar()!;
+                // Total raw samples: full scan, but very rare.
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM samples";
+                    sampleCount = (long)cmd.ExecuteScalar()!;
+                }
+            }
+            else
+            {
+                // Use the stale cached value rather than a full scan.
+                lock (_healthStatsLock)
+                {
+                    sampleCount = _cachedHealthStats?.SampleCount ?? 0;
+                }
             }
 
             // Monitored processes = distinct process names in the most recent batch.
-            // MAX(timestamp) uses idx_samples_ts; the equality seek on timestamp then
-            // returns exactly one batch (~hundreds of rows), so COUNT is instant.
+            // This is a fast index seek — even on 10M rows it's sub-millisecond.
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = """

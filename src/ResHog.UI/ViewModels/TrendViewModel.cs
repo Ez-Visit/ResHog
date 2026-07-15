@@ -75,12 +75,22 @@ public partial class TrendViewModel : ViewModelBase
         try
         {
             var names = await _apiClient.GetProcessNamesAsync();
+            var t = _apiClient.LastTiming;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             if (names != null)
             {
                 ProcessNames.Clear();
                 foreach (var n in names)
                     ProcessNames.Add(n);
             }
+            sw.Stop();
+
+            ApiMs = t.NetworkMs;
+            ServerMs = t.ServerMs;
+            DbMs = t.DbMs;
+            RenderMs = sw.ElapsedMilliseconds;
+            _apiClient.SetTiming(t.NetworkMs, t.ServerMs, t.DbMs, sw.ElapsedMilliseconds);
         }
         catch
         {
@@ -100,6 +110,14 @@ public partial class TrendViewModel : ViewModelBase
         try
         {
             var points = await _apiClient.GetTrendAsync(SelectedProcess, SelectedMetric, SelectedRange);
+            var detail = (points != null && points.Count > 0)
+                ? await _apiClient.GetProcessDetailAsync(SelectedProcess, SelectedRange)
+                : null;
+
+            var t = _apiClient.LastTiming;
+            var renderSw = System.Diagnostics.Stopwatch.StartNew();
+
+            TrendPoints.Clear();
             if (points != null && points.Count > 0)
             {
                 foreach (var p in points)
@@ -108,8 +126,6 @@ public partial class TrendViewModel : ViewModelBase
                 AvgValue = points.Average(p => p.Value);
                 MaxValue = points.Max(p => p.Value);
 
-                // Load process detail for additional stats
-                var detail = await _apiClient.GetProcessDetailAsync(SelectedProcess, SelectedRange);
                 if (detail != null)
                 {
                     SelectedProcessServiceName = detail.ServiceName ?? "—";
@@ -124,6 +140,13 @@ public partial class TrendViewModel : ViewModelBase
                 MaxValue = 0;
                 ProcessDetailInfo = "无数据";
             }
+
+            renderSw.Stop();
+            ApiMs = t.NetworkMs;
+            ServerMs = t.ServerMs;
+            DbMs = t.DbMs;
+            RenderMs = renderSw.ElapsedMilliseconds;
+            _apiClient.SetTiming(t.NetworkMs, t.ServerMs, t.DbMs, renderSw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {

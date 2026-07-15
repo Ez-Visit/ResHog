@@ -16,12 +16,23 @@ public class AlertEngine
     private readonly SampleRepository _repo;
     private readonly AlertOptions _options;
     private readonly ILogger<AlertEngine> _logger;
+    private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
 
-    public AlertEngine(SampleRepository repo, IOptions<ResHogOptions> options, ILogger<AlertEngine> logger)
+    public AlertEngine(SampleRepository repo, IOptions<ResHogOptions> options, ILogger<AlertEngine> logger, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext)
     {
         _repo = repo;
         _options = options.Value.Alerts;
         _logger = logger;
+        _httpContext = httpContext;
+    }
+
+    private void RecordDbTime(long ms)
+    {
+        if (_httpContext.HttpContext is { } ctx)
+        {
+            var current = ctx.Items.TryGetValue("db_time_ms", out var v) && v is long cur ? cur : 0L;
+            ctx.Items["db_time_ms"] = current + ms;
+        }
     }
 
     /// <summary>
@@ -162,9 +173,8 @@ public class AlertEngine
             _ => ""
         };
 
-        lock (_repo.ReadLock)
-        {
-            var conn = _repo.GetReadConnection();
+        using var conn = _repo.OpenConnection();
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT id, timestamp, process_name, pid, service_name,
@@ -193,8 +203,9 @@ public class AlertEngine
                 reader.GetInt32(9) != 0
             ));
         }
+        dbSw.Stop();
+        RecordDbTime(dbSw.ElapsedMilliseconds);
         return results;
-        }
     }
 
     /// <summary>

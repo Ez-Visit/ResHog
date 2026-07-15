@@ -75,17 +75,36 @@ public class ResHogWorker : BackgroundService
                     _repository.BulkInsert(samples);
                     sampleCount += samples.Count;
 
+                    // Push the latest stats into the health cache so /api/health never
+                    // needs to run SELECT COUNT(*) on the full samples table.
+                    _repository.UpdateHealthCache(sampleCount, samples.Count);
+
                     // 3. Periodic alert check (every 30 seconds)
                     if (DateTime.Now - lastAlertCheck > TimeSpan.FromSeconds(30))
                     {
-                        _alertEngine.CheckAlerts();
+                        var alertSw = System.Diagnostics.Stopwatch.StartNew();
+                        var alertCount = _alertEngine.CheckAlerts();
+                        alertSw.Stop();
+                        if (alertSw.ElapsedMilliseconds > 100 || alertCount > 0)
+                        {
+                            _logger.LogInformation(
+                                "Alert check: {Count} alerts in {Ms}ms",
+                                alertCount, alertSw.ElapsedMilliseconds);
+                        }
                         lastAlertCheck = DateTime.Now;
                     }
 
                     // 4. Periodic aggregation (every minute)
                     if (DateTime.Now - lastAggregation > TimeSpan.FromMinutes(1))
                     {
+                        var aggSw = System.Diagnostics.Stopwatch.StartNew();
                         _aggregation.AggregateLastMinute();
+                        aggSw.Stop();
+                        if (aggSw.ElapsedMilliseconds > 100)
+                        {
+                            _logger.LogWarning(
+                                "Minute aggregation took {Ms}ms", aggSw.ElapsedMilliseconds);
+                        }
                         lastAggregation = DateTime.Now;
                     }
 
@@ -101,9 +120,15 @@ public class ResHogWorker : BackgroundService
                         {
                             _ = Task.Run(() =>
                             {
+                                var sw = System.Diagnostics.Stopwatch.StartNew();
                                 try { _retention.PurgeExpiredData(); }
                                 catch (Exception ex) { _logger.LogError(ex, "Retention purge failed (background)"); }
-                                finally { Interlocked.Exchange(ref _purgeBusy, 0); }
+                                finally
+                                {
+                                    sw.Stop();
+                                    _logger.LogInformation("Retention purge completed in {Ms}ms", sw.ElapsedMilliseconds);
+                                    Interlocked.Exchange(ref _purgeBusy, 0);
+                                }
                             });
                         }
                     }
@@ -116,9 +141,15 @@ public class ResHogWorker : BackgroundService
                         {
                             _ = Task.Run(() =>
                             {
+                                var sw = System.Diagnostics.Stopwatch.StartNew();
                                 try { _aggregation.AggregateLastHour(); }
                                 catch (Exception ex) { _logger.LogError(ex, "Hour aggregation failed (background)"); }
-                                finally { Interlocked.Exchange(ref _hourAggBusy, 0); }
+                                finally
+                                {
+                                    sw.Stop();
+                                    _logger.LogInformation("Hour aggregation completed in {Ms}ms", sw.ElapsedMilliseconds);
+                                    Interlocked.Exchange(ref _hourAggBusy, 0);
+                                }
                             });
                         }
                     }
