@@ -98,6 +98,15 @@ public class InstallerViewModel : INotifyPropertyChanged
             StatusText = "正在卸载旧版本...";
 
             int code = await Task.Run(() => RunPowerShell(uninstallPs1, "-KeepData"));
+            if (code != 0)
+            {
+                Steps[2].Status = "Fail";
+                Steps[2].IsRunning = false;
+                HasFailed = true;
+                StatusText = $"卸载旧版本失败 (退出代码: {code}). 请以管理员身份手动运行: sc delete ResHog";
+                IsComplete = true;
+                return;
+            }
             Steps[2].Status = "Success";
             Steps[2].IsRunning = false;
 
@@ -122,10 +131,28 @@ public class InstallerViewModel : INotifyPropertyChanged
             // Step 5: Verify
             Steps[4].Status = "Running";
             Steps[4].IsRunning = true;
-            StatusText = "正在验证服务状态 (等待 PDH 预热)...";
+            StatusText = "正在验证服务状态...";
 
-            await Task.Delay(12000);
-            var ok = await VerifyServiceAsync();
+            // Poll the health API every 3s for up to 60s.
+            // Large databases (12GB+) with covering index creation can take 20-30s
+            // before Kestrel binds — a single 12s wait was not enough.
+            var ok = false;
+            var deadline = DateTime.Now.AddSeconds(60);
+            while (DateTime.Now < deadline)
+            {
+                if (await VerifyServiceAsync())
+                {
+                    ok = true;
+                    break;
+                }
+                await Task.Delay(3000);
+                // check every 3 seconds instead of a single 12s burst
+                if (!ok)
+                {
+                    StatusText = $"正在等待服务就绪 (剩余 {Math.Max(0, (int)(deadline - DateTime.Now).TotalSeconds)}秒)...";
+                }
+            }
+
             Steps[4].Status = ok ? "Success" : "Fail";
             Steps[4].IsRunning = false;
 
@@ -168,11 +195,24 @@ public class InstallerViewModel : INotifyPropertyChanged
         {
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
             WorkingDirectory = Path.GetDirectoryName(scriptPath)
         };
         var proc = Process.Start(psi);
-        proc?.WaitForExit();
-        return proc?.ExitCode ?? -1;
+        if (proc == null) return -1;
+
+        // Read stdout + stderr so the user can see exactly which step failed.
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+
+        if (proc.ExitCode != 0 && !string.IsNullOrEmpty(stderr))
+        {
+            System.Diagnostics.Debug.WriteLine($"[Setup] PowerShell error (exit {proc.ExitCode}): {stderr}");
+        }
+
+        return proc.ExitCode;
     }
 
     /// <summary>

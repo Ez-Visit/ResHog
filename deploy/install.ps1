@@ -28,6 +28,18 @@ $ErrorActionPreference = "Stop"
 $ServiceName = "ResHog"
 $ServiceExe = Join-Path $InstallDir "ResHog.Service.exe"
 
+# 步骤日志辅助函数
+$stepCount = 0
+function Write-Step([string]$title) {
+    $script:stepCount++
+    Write-Host ""
+    Write-Host "[$script:stepCount/$script:totalSteps] $title" -ForegroundColor Green
+    Write-Host "    (Step $script:stepCount)" -ForegroundColor DarkGray
+}
+
+# 统计总步骤数（用于日志标记）
+$totalSteps = 8
+
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  ResHog Installer" -ForegroundColor Cyan
@@ -44,7 +56,7 @@ if ($existingService) {
 }
 
 # 2. Create directories
-Write-Host "[1/7] Creating directories..." -ForegroundColor Green
+Write-Step "Creating directories"
 $dirs = @($InstallDir, $DataDir, "$DataDir\logs", "$DataDir\reports", "$InstallDir\UI")
 foreach ($d in $dirs) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
@@ -53,7 +65,7 @@ Write-Host "    -> $InstallDir"
 Write-Host "    -> $DataDir"
 
 # 3. Copy files
-Write-Host "[2/7] Copying program files..." -ForegroundColor Green
+Write-Step "Copying program files"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Copy service (supports both layouts: service/ subdirectory or flat structure)
@@ -79,7 +91,7 @@ if (Test-Path "$scriptDir\ui") {
 }
 
 # 4. Generate config file from template
-Write-Host "[3/7] Configuring application..." -ForegroundColor Green
+Write-Step "Configuring application"
 $configPath = Join-Path $InstallDir "appsettings.json"
 $templatePath = Join-Path $scriptDir "appsettings.template.json"
 if (-not (Test-Path $templatePath)) {
@@ -99,20 +111,28 @@ if (Test-Path $configPath) {
 }
 
 # 5. Register Windows service
-Write-Host "[4/7] Registering Windows service..." -ForegroundColor Green
+Write-Step "Registering Windows service"
 $binPath = "`"$ServiceExe`""
-sc.exe create $ServiceName binPath= $binPath start= auto DisplayName= "ResHog Resource Monitor" | Out-Null
-sc.exe description $ServiceName "Monitors CPU, memory, and disk I/O usage of all processes for optimization analysis." | Out-Null
+sc.exe create $ServiceName binPath= $binPath start= auto DisplayName= "ResHog Resource Monitor" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "sc.exe create failed with exit code $LASTEXITCODE (service may already exist)" }
+
+sc.exe description $ServiceName "Monitors CPU, memory, and disk I/O usage of all processes for optimization analysis." 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "sc.exe description failed with exit code $LASTEXITCODE" }
 
 # 6. Configure service failure recovery (auto-restart on crash)
-Write-Host "[5/7] Configuring failure recovery..." -ForegroundColor Green
-# 1st failure: restart after 30s; 2nd: 60s; 3rd: 120s; reset failure counter: 1 day
-sc.exe failure $ServiceName reset= 86400 actions= restart/30000/restart/60000/restart/120000 | Out-Null
+Write-Step "Configuring failure recovery"
+sc.exe failure $ServiceName reset= 86400 actions= restart/30000/restart/60000/restart/120000 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "sc.exe failure failed with exit code $LASTEXITCODE" }
 Write-Host "    -> Auto-restart on crash (30s/60s/120s)"
 
 # 7. Start service
-Write-Host "[6/7] Starting service..." -ForegroundColor Green
-sc.exe start $ServiceName | Out-Null
+Write-Step "Starting service"
+sc.exe start $ServiceName 2>&1 | Out-Null
+$startExitCode = $LASTEXITCODE
+if ($startExitCode -ne 0 -and $startExitCode -ne 1056) {
+    # 1056 = service already running, which is fine
+    Write-Host "    -> sc start returned exit code $startExitCode (service may still be starting)" -ForegroundColor Yellow
+}
 
 # Poll for up to 30s. Service init (DB load + Kestrel bind) can exceed a
 # fixed 3s wait on large databases, leaving the status StartPending. Only
@@ -137,7 +157,7 @@ if ($status -eq "Running") {
 }
 
 # 8. Create shortcuts
-Write-Host "[7/7] Creating shortcuts..." -ForegroundColor Green
+Write-Step "Creating shortcuts"
 $uiExe = Join-Path $InstallDir "UI\ResHog.UI.exe"
 if (Test-Path $uiExe) {
     $startMenuPath = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\ResHog.lnk"

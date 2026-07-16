@@ -175,4 +175,23 @@ public class ResHogWorker : BackgroundService
             "ResHog service stopping. Cycles: {Cycles}, total samples: {Total}",
             cycleCount, sampleCount);
     }
+
+    /// <summary>
+    /// On graceful shutdown, checkpoint the WAL so the next start doesn't
+    /// have accumulated backlog (critical after a crash-kill cycle).
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var conn = _repository.OpenConnection();
+            conn.ExecuteNonQuery("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "WAL checkpoint on shutdown failed (non-critical)");
+        }
+
+        await base.StopAsync(cancellationToken);
+    }
 }

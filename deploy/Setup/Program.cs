@@ -6,7 +6,7 @@ using System.Text;
 Console.OutputEncoding = Encoding.UTF8;
 
 Console.WriteLine("================================================");
-Console.WriteLine("       ResHog Setup v0.2.1");
+Console.WriteLine("       ResHog Setup v0.2.2");
 Console.WriteLine("       Windows Resource Monitor Installer");
 Console.WriteLine("================================================");
 Console.WriteLine();

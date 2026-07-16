@@ -5,170 +5,254 @@ namespace ResHog.Services;
 
 /// <summary>
 /// Manages process search (by name or port) and process termination.
-/// Uses System.Diagnostics.Process for kill and IPGlobalProperties for port mapping.
+/// Uses System.Diagnostics.Process for kill and netstat -ano for port mapping.
+///
+/// Performance strategy:
+/// - Port-map (netstat -ano): cached for 5 seconds (stable data).
+/// - Process-list (GetProcesses + attributes): first call sync-full, then
+///   async background refresh in batches of 50 — never block a repeated call.
 /// </summary>
 public class ProcessManager
 {
+    // --- Port-map cache (netstat) ---
+    private Dictionary<int, HashSet<int>>? _cachedPortMap;
+    private DateTime _portMapCachedAt;
+    private static readonly TimeSpan PortMapTtl = TimeSpan.FromSeconds(5);
+    private readonly object _portMapLock = new();
+
+    // --- Process-list cache (async batch refresh) ---
+    private List<ProcessInfoDto>? _cachedProcessList;
+    private DateTime _processListCachedAt;
+    private static readonly TimeSpan ProcessListRefreshInterval = TimeSpan.FromSeconds(3);
+    private readonly object _processListLock = new();
+    private int _refreshBusy;           // 0=free, 1=busy
+
+    private const int BatchSize = 50;  // processes per batch for progressive cache update
+
     /// <summary>
     /// Search running processes by name or port number.
     /// </summary>
     public List<ProcessInfoDto> SearchProcesses(string query)
     {
-        var results = new List<ProcessInfoDto>();
-
-        // Determine search mode: port number or process name
         var trimmed = query.Trim();
         var isPort = int.TryParse(trimmed, out var port);
         var isAll = string.IsNullOrEmpty(trimmed);
 
         if (isPort)
-        {
             return SearchByPort(port);
-        }
 
-        // Search by process name (case-insensitive contains); empty query returns all
-        var portMap = ResolvePortPids();
+        // Returns cached list immediately (never blocks). If stale, triggers
+        // async batch refresh. First-ever call does sync full enumeration.
+        var allProcesses = GetCachedProcessList();
+        var portMap = GetCachedPortMap();
 
-        foreach (var proc in System.Diagnostics.Process.GetProcesses())
+        var results = new List<ProcessInfoDto>(allProcesses.Count);
+        foreach (var proc in allProcesses)
         {
-            try
+            if (isAll || proc.ProcessName.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
             {
-                if (isAll || proc.ProcessName.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
+                if (portMap.TryGetValue(proc.Pid, out var portSet) && portSet.Count > 0)
                 {
-                    var ports = portMap.TryGetValue(proc.Id, out var portSet)
-                        ? string.Join(", ", portSet.Select(p => $"TCP/UDP:{p}"))
-                        : "";
-
-                    results.Add(new ProcessInfoDto(
-                        proc.Id,
-                        proc.ProcessName,
-                        Math.Round(proc.WorkingSet64 / 1048576.0, 1),
-                        0, // CPU requires a snapshot; skip for search results
-                        ports,
-                        proc.MainModule?.FileName ?? "",
-                        proc.Threads.Count
-                    ));
+                    var ports = string.Join(", ", portSet.Select(p => $"TCP/UDP:{p}"));
+                    results.Add(proc with { Ports = ports });
                 }
-            }
-            catch
-            {
-                // Process may have exited or access denied
+                else
+                {
+                    results.Add(proc);
+                }
             }
         }
 
         return results;
     }
 
-    private List<ProcessInfoDto> SearchByPort(int port)
+    // ====================================================================
+    // Port map cache
+    // ====================================================================
+
+    private Dictionary<int, HashSet<int>> GetCachedPortMap()
     {
-        var pidToPorts = new Dictionary<int, List<string>>();
-
-        // TCP listeners
-        foreach (var ep in IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners())
+        lock (_portMapLock)
         {
-            if (ep.Port == port)
-            {
-                var pid = GetPidForTcpPort(ep.Port);
-                if (pid > 0)
-                {
-                    if (!pidToPorts.ContainsKey(pid))
-                        pidToPorts[pid] = new List<string>();
-                    pidToPorts[pid].Add($"TCP:{ep.Port}");
-                }
-            }
+            if (_cachedPortMap != null && DateTime.Now - _portMapCachedAt < PortMapTtl)
+                return _cachedPortMap;
         }
 
-        // TCP connections
-        foreach (var conn in IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpConnections())
+        var fresh = ResolvePortPids();
+        lock (_portMapLock)
         {
-            if (conn.LocalEndPoint.Port == port)
-            {
-                if (!pidToPorts.ContainsKey(0))
-                    pidToPorts[0] = new List<string>();
-                pidToPorts[0].Add($"TCP:{port}");
-            }
+            _cachedPortMap = fresh;
+            _portMapCachedAt = DateTime.Now;
+            return _cachedPortMap;
+        }
+    }
+
+    // ====================================================================
+    // Process-list cache with async batch refresh
+    // ====================================================================
+
+    private List<ProcessInfoDto> GetCachedProcessList()
+    {
+        // Always return cache immediately — never block.
+        // If empty or stale, fire a background batch refresh.
+        bool needsRefresh;
+        lock (_processListLock)
+        {
+            needsRefresh = _cachedProcessList == null ||
+                DateTime.Now - _processListCachedAt >= ProcessListRefreshInterval;
         }
 
-        // UDP listeners
-        foreach (var ep in IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners())
+        if (needsRefresh && Interlocked.CompareExchange(ref _refreshBusy, 1, 0) == 0)
         {
-            if (ep.Port == port)
-            {
-                if (!pidToPorts.ContainsKey(0))
-                    pidToPorts[0] = new List<string>();
-                pidToPorts[0].Add($"UDP:{port}");
-            }
+            _ = RefreshProcessListBatchedAsync();
         }
 
-        // Resolve PIDs via netstat-style approach
-        var resolved = ResolvePortPids();
-
-        var results = new List<ProcessInfoDto>();
-        var seen = new HashSet<int>();
-
-        foreach (var kv in resolved)
+        lock (_processListLock)
         {
-            if (kv.Value.Contains(port))
-            {
-                if (!seen.Add(kv.Key))
-                    continue;
+            return _cachedProcessList ?? new List<ProcessInfoDto>();
+        }
+    }
 
+    /// <summary>
+    /// Background task: enumerates processes in batches of <see cref="BatchSize"/>,
+    /// updating the shared cache after every completed batch so concurrent callers
+    /// get progressively fresher data instead of waiting for the full 400-process scan.
+    /// </summary>
+    private async Task RefreshProcessListBatchedAsync()
+    {
+        try
+        {
+            // Snapshot current PIDs first (fast, system-level call).
+            var allPids = System.Diagnostics.Process.GetProcesses()
+                .Select(p => p.Id)
+                .ToArray();
+
+            var partial = new List<ProcessInfoDto>(allPids.Length);
+            int processed = 0;
+
+            foreach (var pid in allPids)
+            {
                 try
                 {
-                    var proc = System.Diagnostics.Process.GetProcessById(kv.Key);
-                    results.Add(new ProcessInfoDto(
+                    using var proc = System.Diagnostics.Process.GetProcessById(pid);
+                    partial.Add(new ProcessInfoDto(
                         proc.Id,
                         proc.ProcessName,
                         Math.Round(proc.WorkingSet64 / 1048576.0, 1),
                         0,
-                        string.Join(", ", kv.Value.Select(p => $"TCP/UDP:{p}")),
+                        "",
                         proc.MainModule?.FileName ?? "",
                         proc.Threads.Count
                     ));
                 }
                 catch
                 {
-                    results.Add(new ProcessInfoDto(
-                        kv.Key,
-                        "(已退出)",
-                        0, 0,
-                        string.Join(", ", kv.Value.Select(p => $":{p}")),
-                        "",
-                        0
-                    ));
+                    // Process exited between snapshot and access — skip.
                 }
+
+                processed++;
+
+                // After every batch, swap the cache so progressive data is visible.
+                if (processed % BatchSize == 0)
+                {
+                    lock (_processListLock)
+                    {
+                        _cachedProcessList = new List<ProcessInfoDto>(partial);
+                        _processListCachedAt = DateTime.Now;
+                    }
+                    // Yield so other threads (API callers) can acquire the lock.
+                    await Task.Yield();
+                }
+            }
+
+            // Final swap with complete list.
+            lock (_processListLock)
+            {
+                _cachedProcessList = partial;
+                _processListCachedAt = DateTime.Now;
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _refreshBusy, 0);
+        }
+    }
+
+    /// <summary>
+    /// Synchronous full enumeration (first call only, ~16s for 400+ processes).
+    /// </summary>
+    private static List<ProcessInfoDto> EnumerateProcesses()
+    {
+        var results = new List<ProcessInfoDto>(512);
+        foreach (var proc in System.Diagnostics.Process.GetProcesses())
+        {
+            try
+            {
+                results.Add(new ProcessInfoDto(
+                    proc.Id,
+                    proc.ProcessName,
+                    Math.Round(proc.WorkingSet64 / 1048576.0, 1),
+                    0,
+                    "",
+                    proc.MainModule?.FileName ?? "",
+                    proc.Threads.Count
+                ));
+            }
+            catch { }
+        }
+        return results;
+    }
+
+    // ====================================================================
+    // Port search
+    // ====================================================================
+
+    private List<ProcessInfoDto> SearchByPort(int port)
+    {
+        var portMap = GetCachedPortMap();
+        var results = new List<ProcessInfoDto>();
+        var seen = new HashSet<int>();
+
+        foreach (var kv in portMap)
+        {
+            if (!kv.Value.Contains(port)) continue;
+            if (!seen.Add(kv.Key)) continue;
+
+            try
+            {
+                using var proc = System.Diagnostics.Process.GetProcessById(kv.Key);
+                results.Add(new ProcessInfoDto(
+                    proc.Id,
+                    proc.ProcessName,
+                    Math.Round(proc.WorkingSet64 / 1048576.0, 1),
+                    0,
+                    string.Join(", ", kv.Value.Select(p => $"TCP/UDP:{p}")),
+                    proc.MainModule?.FileName ?? "",
+                    proc.Threads.Count
+                ));
+            }
+            catch
+            {
+                results.Add(new ProcessInfoDto(
+                    kv.Key, "(已退出)", 0, 0,
+                    string.Join(", ", kv.Value.Select(p => $":{p}")),
+                    "", 0
+                ));
             }
         }
 
         return results;
     }
 
-    private static int GetPidForTcpPort(int port)
-    {
-        try
-        {
-            var props = IPGlobalProperties.GetIPGlobalProperties();
-            foreach (var conn in props.GetActiveTcpConnections())
-            {
-                if (conn.LocalEndPoint.Port == port)
-                    return 0; // Can't get PID from IPGlobalProperties
-            }
-        }
-        catch { }
-        return 0;
-    }
+    // ====================================================================
+    // netstat -ano
+    // ====================================================================
 
-    /// <summary>
-    /// Resolve port-to-PID mapping by scanning the entire port space via netstat-like approach.
-    /// Uses Process.GetProcesses() to find processes with open ports.
-    /// </summary>
     private static Dictionary<int, HashSet<int>> ResolvePortPids()
     {
         var result = new Dictionary<int, HashSet<int>>();
-
         try
         {
-            // Use netstat -ano output via Process
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "netstat.exe",
@@ -187,7 +271,6 @@ public class ProcessManager
             foreach (var line in output.Split('\n'))
             {
                 var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                // Expected: Proto, Local Address, Foreign Address, State, PID
                 if (parts.Length >= 5 && int.TryParse(parts[^1], out var pid) && pid > 0)
                 {
                     var local = parts[1];
@@ -200,28 +283,21 @@ public class ProcessManager
                     }
                 }
             }
-
             return result;
         }
-        catch
-        {
-            return result;
-        }
+        catch { return result; }
     }
 
-    /// <summary>
-    /// Kill a process by PID. Returns a descriptive result.
-    /// Refuses to kill PID ≤ 4 (system critical) or the current process.
-    /// </summary>
+    // ====================================================================
+    // Kill
+    // ====================================================================
+
     public KillProcessResponseDto KillProcess(int pid)
     {
         try
         {
-            // Refuse to kill system-critical processes
             if (pid <= 4)
                 return new KillProcessResponseDto(false, "拒绝：PID ≤ 4 是系统关键进程，不能终止。");
-
-            // Refuse to kill self
             if (pid == Environment.ProcessId)
                 return new KillProcessResponseDto(false, "拒绝：不能终止 ResHog 自身。");
 
@@ -229,7 +305,6 @@ public class ProcessManager
             var name = proc.ProcessName;
             proc.Kill(entireProcessTree: true);
             proc.WaitForExit(3000);
-
             return new KillProcessResponseDto(true, $"已成功终止进程 {name} (PID: {pid})。");
         }
         catch (ArgumentException)

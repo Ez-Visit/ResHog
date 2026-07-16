@@ -25,7 +25,8 @@ internal static class QueryHelpers
             // Floor to the minute boundary so the earliest in-range minute is not excluded
             // by trailing second digits, and the value matches idx_min_minute exactly.
             "24h" => ("samples_minute", "minute", FloorToMinute(now.AddHours(-24))),
-            "7d" => ("samples_minute", "minute", FloorToMinute(now.AddDays(-7))),
+            // Hour aggregation: hour stored as "yyyy-MM-ddTHH:00:00".
+            "7d" => ("samples_hour", "hour", FloorToHour(now.AddDays(-7))),
             "30d" => ("samples_minute", "minute", FloorToMinute(now.AddDays(-30))),
             // Hour aggregation: hour stored as "yyyy-MM-ddTHH:00:00".
             "90d" => ("samples_hour", "hour", FloorToHour(now.AddDays(-90))),

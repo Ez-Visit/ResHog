@@ -32,8 +32,8 @@ Write-Host "[1/4] Stopping service..." -ForegroundColor Green
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service) {
     if ($service.Status -eq "Running") {
-        Stop-Service -Name $ServiceName -Force
-        Start-Sleep -Seconds 2
+        sc.exe stop $ServiceName 2>&1 | Out-Null
+        Start-Sleep -Seconds 3
     }
     Write-Host "    -> Service stopped"
 } else {
@@ -43,7 +43,16 @@ if ($service) {
 # 2. Delete service
 Write-Host "[2/4] Deleting Windows service..." -ForegroundColor Green
 if ($service) {
-    sc.exe delete $ServiceName | Out-Null
+    sc.exe delete $ServiceName 2>&1 | Out-Null
+    # 1060 = service not found (already gone), 1072 = marked for deletion (pending)
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1060 -and $LASTEXITCODE -ne 1072) {
+        Write-Host "    -> sc.exe delete returned $LASTEXITCODE, retrying..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        sc.exe delete $ServiceName 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1060 -and $LASTEXITCODE -ne 1072) {
+            throw "sc.exe delete failed with exit code $LASTEXITCODE"
+        }
+    }
     Start-Sleep -Seconds 2
     Write-Host "    -> Service deleted"
 }

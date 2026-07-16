@@ -55,14 +55,18 @@ public class TopNAnalyzer
         // idx_samples_ts) lets the range become a SEEK instead, cutting the scan to
         // only the in-range rows (~6x faster, identical Top-N results). We pin it
         // explicitly because the cost model otherwise chooses the wrong plan.
-        var indexHint = isRaw ? "idx_samples_ts" : "idx_min_name_minute";
+        // For the hour-aggregation table (7d) the row count is small (~20K), so
+        // a covering index is unnecessary — SQLite's own planner picks idx_hour_hour.
+        var useIndex = !isRaw && table != "samples_hour";
+        var indexHint = isRaw ? "idx_samples_ts_covering" : (useIndex ? "idx_min_covering" : null);
+        var indexClause = indexHint != null ? $"\nFROM {table} INDEXED BY {indexHint}" : $"\nFROM {table}";
         cmd.CommandText = $"""
             SELECT process_name,
                    MAX(service_name) as service_name,
                    AVG({valCol}) as avg_value,
                    MAX({valCol}) as max_value,
                    AVG({secCol}) as secondary
-            FROM {table} INDEXED BY {indexHint}
+            {indexClause}
             WHERE {timeCol} >= @since
             GROUP BY process_name
             ORDER BY avg_value DESC
