@@ -109,10 +109,15 @@ public partial class TrendViewModel : ViewModelBase
 
         try
         {
-            var points = await _apiClient.GetTrendAsync(SelectedProcess, SelectedMetric, SelectedRange);
-            var detail = (points != null && points.Count > 0)
-                ? await _apiClient.GetProcessDetailAsync(SelectedProcess, SelectedRange)
-                : null;
+            // 缺陷 #12 修复：并行发起 trend + detail 两个请求，总延迟 = max(trend, detail) 而非 trend + detail
+            // 注意：即使 trend 返回空也要让 detail 任务完成（避免异常未观察）；
+            //       是否使用 detail 结果由下面 points.Count > 0 决定
+            var trendTask = _apiClient.GetTrendAsync(SelectedProcess, SelectedMetric, SelectedRange);
+            var detailTask = _apiClient.GetProcessDetailAsync(SelectedProcess, SelectedRange);
+            await Task.WhenAll(trendTask, detailTask);
+
+            var points = trendTask.Result;
+            var detail = (points != null && points.Count > 0) ? detailTask.Result : null;
 
             var t = _apiClient.LastTiming;
             var renderSw = System.Diagnostics.Stopwatch.StartNew();

@@ -39,6 +39,10 @@ public class AlertEngine
     /// Checks the latest sampling batch for threshold violations and inserts alert records.
     /// Respects the configured cooldown period: if an unresolved alert for the same
     /// process+metric exists within the cooldown window, no new alert is inserted.
+    ///
+    /// 缺陷 #8 修复：用一次批量预加载所有冷却中的 (process_name, metric) 对到 HashSet，
+    /// 后续在内存中检查冷却，避免 N+1 SQL（原来每候选每指标都跑一次 SELECT COUNT(*)）。
+    /// 单次 CheckAlerts 的 SQL 次数从 500-2000 降到 1（候选）+ 1（批量冷却）+ K（INSERT）≈ 10-50。
     /// </summary>
     /// <returns>Number of new alerts inserted.</returns>
     public int CheckAlerts()
@@ -51,12 +55,8 @@ public class AlertEngine
         var latestTs = (string?)tsCmd.ExecuteScalar();
         if (latestTs is null) return 0;
 
-        // Cooldown cutoff: skip if an alert for this process+metric was inserted recently.
-        // MUST match the stored alerts.timestamp format (yyyy-MM-ddTHH:mm:ss.fffffff, no offset),
-        // otherwise the text comparison 'timestamp >= @cooldown' is always false and the
-        // cooldown never fires (duplicate alerts every cycle).
-        var cooldownTs = DateTime.Now.AddMinutes(-_options.AlertCooldownMin)
-            .ToString("yyyy-MM-ddTHH:mm:ss.fffffff");
+        // Cooldown cutoff：用统一的格式化方法（缺陷 #16）
+        var cooldownTs = SampleRepository.FormatTimestamp(DateTime.Now.AddMinutes(-_options.AlertCooldownMin));
 
         // Fetch all samples from the latest batch that exceed any threshold
         var candidates = new List<AlertCandidate>();
@@ -100,40 +100,67 @@ public class AlertEngine
             }
         }
 
+        // 批量预加载所有冷却中的 (process_name, metric) 对到 HashSet（缺陷 #8 修复）
+        // 后续在内存中检查冷却，避免 N+1 SQL。走 idx_alerts_name_metric_ts 索引。
+        var cooldownSet = new HashSet<(string ProcessName, string Metric)>();
+        using (var cooldownCmd = conn.CreateCommand())
+        {
+            cooldownCmd.CommandText = """
+                SELECT DISTINCT process_name, metric FROM alerts
+                WHERE timestamp >= @cooldown AND resolved = 0
+                """;
+            cooldownCmd.Parameters.AddWithValue("@cooldown", cooldownTs);
+            using var cooldownReader = cooldownCmd.ExecuteReader();
+            while (cooldownReader.Read())
+            {
+                cooldownSet.Add((cooldownReader.GetString(0), cooldownReader.GetString(1)));
+            }
+        }
+
         // Process each candidate: evaluate thresholds and insert alerts (with cooldown check)
         var inserted = 0;
         foreach (var c in candidates)
         {
             // CPU alerts (critical takes precedence over warning)
             if (c.Cpu >= _options.CpuCriticalPercent)
-                inserted += TryInsertAlert(conn, latestTs, c, "cpu", c.Cpu, _options.CpuCriticalPercent, "critical", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "cpu",
+                    c.Cpu, _options.CpuCriticalPercent, "critical", cooldownSet);
             else if (c.Cpu >= _options.CpuWarningPercent)
-                inserted += TryInsertAlert(conn, latestTs, c, "cpu", c.Cpu, _options.CpuWarningPercent, "warning", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "cpu",
+                    c.Cpu, _options.CpuWarningPercent, "warning", cooldownSet);
 
             // Memory alerts
             if (c.Memory >= _options.MemoryCriticalMb)
-                inserted += TryInsertAlert(conn, latestTs, c, "memory", c.Memory, _options.MemoryCriticalMb, "critical", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "memory",
+                    c.Memory, _options.MemoryCriticalMb, "critical", cooldownSet);
             else if (c.Memory >= _options.MemoryWarningMb)
-                inserted += TryInsertAlert(conn, latestTs, c, "memory", c.Memory, _options.MemoryWarningMb, "warning", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "memory",
+                    c.Memory, _options.MemoryWarningMb, "warning", cooldownSet);
 
             // I/O alerts (combined read + write)
             var totalIo = c.IoRead + c.IoWrite;
             if (totalIo >= _options.IoCriticalMbPerSec)
-                inserted += TryInsertAlert(conn, latestTs, c, "io", totalIo, _options.IoCriticalMbPerSec, "critical", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "io",
+                    totalIo, _options.IoCriticalMbPerSec, "critical", cooldownSet);
             else if (totalIo >= _options.IoWarningMbPerSec)
-                inserted += TryInsertAlert(conn, latestTs, c, "io", totalIo, _options.IoWarningMbPerSec, "warning", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "io",
+                    totalIo, _options.IoWarningMbPerSec, "warning", cooldownSet);
 
             // Thread count alerts
             if (c.ThreadCount >= _options.ThreadCriticalCount)
-                inserted += TryInsertAlert(conn, latestTs, c, "threads", c.ThreadCount, _options.ThreadCriticalCount, "critical", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "threads",
+                    c.ThreadCount, _options.ThreadCriticalCount, "critical", cooldownSet);
             else if (c.ThreadCount >= _options.ThreadWarningCount)
-                inserted += TryInsertAlert(conn, latestTs, c, "threads", c.ThreadCount, _options.ThreadWarningCount, "warning", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "threads",
+                    c.ThreadCount, _options.ThreadWarningCount, "warning", cooldownSet);
 
             // Handle count alerts
             if (c.HandleCount >= _options.HandleCriticalCount)
-                inserted += TryInsertAlert(conn, latestTs, c, "handles", c.HandleCount, _options.HandleCriticalCount, "critical", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "handles",
+                    c.HandleCount, _options.HandleCriticalCount, "critical", cooldownSet);
             else if (c.HandleCount >= _options.HandleWarningCount)
-                inserted += TryInsertAlert(conn, latestTs, c, "handles", c.HandleCount, _options.HandleWarningCount, "warning", cooldownTs);
+                inserted += TryInsertAlertWithMemoryCheck(conn, latestTs, c, "handles",
+                    c.HandleCount, _options.HandleWarningCount, "warning", cooldownSet);
         }
 
         if (inserted > 0)
@@ -149,20 +176,17 @@ public class AlertEngine
     /// <summary>
     /// Queries alert records within a time range, optionally filtered by severity.
     /// </summary>
-    /// <param name="range">One of: 1h, 24h, 7d, 30d</param>
+    /// <param name="range">One of: 1h, 24h, 7d</param>
     /// <param name="severity">One of: all, warning, critical</param>
     public List<AlertDto> GetAlerts(string range, string severity)
     {
         var now = DateTime.Now;
-        // Match the stored alerts.timestamp format (no offset) so the text range
-        // comparison in WHERE timestamp >= @since works correctly.
-        const string sinceFmt = "yyyy-MM-ddTHH:mm:ss.fffffff";
+        // 用统一的格式化方法（缺陷 #16），保证与写入格式一致
         var since = range.ToLowerInvariant() switch
         {
-            "1h" => now.AddHours(-1).ToString(sinceFmt),
-            "7d" => now.AddDays(-7).ToString(sinceFmt),
-            "30d" => now.AddDays(-30).ToString(sinceFmt),
-            _ => now.AddHours(-24).ToString(sinceFmt)
+            "1h" => SampleRepository.FormatTimestamp(now.AddHours(-1)),
+            "7d" => SampleRepository.FormatTimestamp(now.AddDays(-7)),
+            _ => SampleRepository.FormatTimestamp(now.AddHours(-24))
         };
 
         var severityClause = severity.ToLowerInvariant() switch
@@ -209,25 +233,20 @@ public class AlertEngine
     }
 
     /// <summary>
-    /// Attempts to insert an alert record, respecting the cooldown period.
-    /// Returns 1 if inserted, 0 if skipped due to cooldown.
+    /// 内存检查冷却 + INSERT（缺陷 #8 修复）。
+    /// 冷却状态由调用方（CheckAlerts）预先批量加载到 cooldownSet。
+    /// INSERT 成功后立即把 (process_name, metric) 加入 cooldownSet，
+    /// 避免同一批次内对同一进程重复告警（例如 critical 和 warning 都触发时）。
     /// </summary>
-    private int TryInsertAlert(
+    /// <returns>true 表示插入成功；false 表示命中冷却跳过</returns>
+    private int TryInsertAlertWithMemoryCheck(
         SqliteConnection conn, string timestamp, AlertCandidate c,
-        string metric, double value, double threshold, string severity, string cooldownTs)
+        string metric, double value, double threshold, string severity,
+        HashSet<(string ProcessName, string Metric)> cooldownSet)
     {
-        // Check if an unresolved alert for this process+metric exists within the cooldown window
-        using var checkCmd = conn.CreateCommand();
-        checkCmd.CommandText = """
-            SELECT COUNT(*) FROM alerts
-            WHERE process_name = @pname AND metric = @metric
-              AND timestamp >= @cooldown AND resolved = 0
-            """;
-        checkCmd.Parameters.AddWithValue("@pname", c.ProcessName);
-        checkCmd.Parameters.AddWithValue("@metric", metric);
-        checkCmd.Parameters.AddWithValue("@cooldown", cooldownTs);
-        var existing = (long)checkCmd.ExecuteScalar()!;
-        if (existing > 0) return 0;
+        // 内存检查：命中冷却则跳过
+        if (cooldownSet.Contains((c.ProcessName, metric)))
+            return 0;
 
         using var insertCmd = conn.CreateCommand();
         insertCmd.CommandText = """
@@ -243,6 +262,9 @@ public class AlertEngine
         insertCmd.Parameters.AddWithValue("@threshold", threshold);
         insertCmd.Parameters.AddWithValue("@severity", severity);
         insertCmd.ExecuteNonQuery();
+
+        // 立即加入冷却集合，防止同批次内同进程的 critical + warning 都触发
+        cooldownSet.Add((c.ProcessName, metric));
         return 1;
     }
 

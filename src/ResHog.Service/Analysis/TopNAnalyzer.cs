@@ -33,7 +33,7 @@ public class TopNAnalyzer
     /// </summary>
     /// <param name="metric">One of: cpu, memory, io_read, io_write</param>
     /// <param name="limit">Maximum results (clamped to 1–100)</param>
-    /// <param name="range">One of: 1h, 24h, 7d, 30d, 90d</param>
+    /// <param name="range">One of: 1h, 24h, 7d</param>
     public List<TopNResultDto> GetTopN(string metric, int limit, string range)
     {
         limit = Math.Clamp(limit, 1, 100);
@@ -55,11 +55,9 @@ public class TopNAnalyzer
         // idx_samples_ts) lets the range become a SEEK instead, cutting the scan to
         // only the in-range rows (~6x faster, identical Top-N results). We pin it
         // explicitly because the cost model otherwise chooses the wrong plan.
-        // For the hour-aggregation table (7d) the row count is small (~20K), so
-        // a covering index is unnecessary — SQLite's own planner picks idx_hour_hour.
-        var useIndex = !isRaw && table != "samples_hour";
-        var indexHint = isRaw ? "idx_samples_ts_covering" : (useIndex ? "idx_min_covering" : null);
-        var indexClause = indexHint != null ? $"\nFROM {table} INDEXED BY {indexHint}" : $"\nFROM {table}";
+        // v4 重构后 samples_hour 表已删除，7d 查询也走 samples_minute。
+        var indexHint = isRaw ? "idx_samples_ts_covering" : "idx_min_covering";
+        var indexClause = $"\nFROM {table} INDEXED BY {indexHint}";
         cmd.CommandText = $"""
             SELECT process_name,
                    MAX(service_name) as service_name,

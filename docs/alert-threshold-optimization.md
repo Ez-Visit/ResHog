@@ -218,7 +218,14 @@ public class DynamicThresholdCalculator
 3. **新进程处理**：无历史数据时回退到 Phase 2 的系统感知阈值
 4. **存储**：基线数据写入 `process_baselines` 表
 
+> ⚠️ **状态：未实现（Phase 3 规划）**
+>
+> 以下 `process_baselines` 表为 Phase 3 自适应阈值的规划，**当前未实现**。
+> 当前告警阈值是静态配置（见 `appsettings.json` 的 `Alerts` 节）。
+> Phase 1（静态阈值）和 Phase 2（系统感知阈值）已实现，见 AlertEngine.cs。
+
 ```sql
+-- 规划中的表结构（未实现）
 CREATE TABLE IF NOT EXISTS process_baselines (
     process_name    TEXT NOT NULL,
     date            TEXT NOT NULL,

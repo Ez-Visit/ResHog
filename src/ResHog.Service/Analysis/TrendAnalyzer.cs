@@ -34,7 +34,7 @@ public class TrendAnalyzer
     /// </summary>
     /// <param name="process">Process name (exact match)</param>
     /// <param name="metric">One of: cpu, memory, io_read, io_write</param>
-    /// <param name="range">One of: 1h, 24h, 7d, 30d, 90d</param>
+    /// <param name="range">One of: 1h, 24h, 7d</param>
     public List<TrendPointDto> GetTrend(string process, string metric, string range)
     {
         var (table, timeCol, since) = QueryHelpers.ResolveRange(range);
@@ -44,9 +44,20 @@ public class TrendAnalyzer
         using var conn = _repo.OpenConnection();
         var dbSw = System.Diagnostics.Stopwatch.StartNew();
         using var cmd = conn.CreateCommand();
+
+        // 强制走覆盖索引，避免回表（缺陷 #5 修复，对标 TopNAnalyzer.GetTopN 的 INDEXED BY 优化）
+        // 注：samples 原始表 1h 范围数据量小（~1800 行/进程），不强求覆盖索引；
+        //   samples_minute 上有专用覆盖索引 idx_min_trend_covering。
+        // 不加 hint 时 SQLite 可能选其他索引（不含值列），导致每行回表取 avg_cpu 等。
+        // v4 重构后 samples_hour 表已删除，7d 查询也走 samples_minute。
+        var indexHint = table switch
+        {
+            "samples_minute" => "\nINDEXED BY idx_min_trend_covering",
+            _ => ""
+        };
         cmd.CommandText = $"""
             SELECT {timeCol} as ts, AVG({valCol}) as val
-            FROM {table}
+            FROM {table}{indexHint}
             WHERE process_name = @process AND {timeCol} >= @since
             GROUP BY {timeCol}
             ORDER BY {timeCol}
@@ -87,7 +98,11 @@ public class TrendAnalyzer
         using var conn = _repo.OpenConnection();
         var dbSw = System.Diagnostics.Stopwatch.StartNew();
 
-        // Aggregate stats
+        // Aggregate stats + PIDs（缺陷 #12 修复：合并 PID 查询到主聚合，避免二次扫描）
+        // GROUP_CONCAT(DISTINCT pid) 一次性返回逗号分隔的 PID 字符串，
+        // 避免原来单独的 SELECT DISTINCT pid FROM samples 二次扫描（同范围 ~1800 行/进程）。
+        // 注：SQLite 的 GROUP_CONCAT 默认上限 1MB（SQLITE_LIMIT_LENGTH），单进程 1h 内 PID 数
+        // 有限（通常 <10），不会触及上限。
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT
@@ -102,7 +117,8 @@ public class TrendAnalyzer
                 AVG({ioReadCol}) as avg_io_read,
                 AVG({ioWriteCol}) as avg_io_write,
                 MAX({threadCol}) as max_threads,
-                MAX({handleCol}) as max_handles
+                MAX({handleCol}) as max_handles,
+                GROUP_CONCAT(DISTINCT pid) as pid_list
             FROM {table}
             WHERE process_name = @name AND {timeCol} >= @since
             """;
@@ -112,21 +128,17 @@ public class TrendAnalyzer
         using var reader = cmd.ExecuteReader();
         if (!reader.Read() || reader.GetInt64(1) == 0) return null;
 
-        // Get PIDs (only meaningful for raw samples table)
+        // 解析 pid_list（逗号分隔字符串 → List<int>，仅 raw samples 表有 pid 列）
+        // samples_minute / samples_hour 表无 pid 列，GROUP_CONCAT(DISTINCT pid) 返回 NULL
         List<int> pids = [];
-        if (isRaw)
+        if (isRaw && !reader.IsDBNull(12))
         {
-            using var pidCmd = conn.CreateCommand();
-            pidCmd.CommandText = """
-                SELECT DISTINCT pid FROM samples
-                WHERE process_name = @name AND timestamp >= @since
-                ORDER BY pid
-                """;
-            pidCmd.Parameters.AddWithValue("@name", name);
-            pidCmd.Parameters.AddWithValue("@since", since);
-            using var pidReader = pidCmd.ExecuteReader();
-            while (pidReader.Read())
-                pids.Add(pidReader.GetInt32(0));
+            var pidListStr = reader.GetString(12);
+            foreach (var pidStr in pidListStr.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (int.TryParse(pidStr, out var pid)) pids.Add(pid);
+            }
+            pids.Sort();
         }
 
         dbSw.Stop();

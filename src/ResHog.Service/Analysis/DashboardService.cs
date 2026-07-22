@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Caching.Memory;
 using ResHog.Shared.Dtos;
 using ResHog.Storage;
 
@@ -13,6 +14,7 @@ public class DashboardService
 {
     private readonly SampleRepository _repo;
     private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
+    private readonly IMemoryCache _cache;
 
     // GetProcessNames runs SELECT DISTINCT process_name FROM samples (a multi-million-row
     // scan). The UI autocomplete calls /api/processes frequently, so cache the result.
@@ -21,10 +23,19 @@ public class DashboardService
     private static readonly TimeSpan ProcessNamesCacheTtl = TimeSpan.FromMinutes(5);
     private readonly object _processNamesLock = new();
 
-    public DashboardService(SampleRepository repo, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext)
+    // Dashboard 1s 缓存（缺陷 #6 修复）：前端每 2s 轮询 /api/dashboard，1s 缓存让 DB 压力减半。
+    // 用户感知不到 1s 延迟（相对于采样本身的 2s 周期可忽略）。
+    private static readonly TimeSpan DashboardCacheTtl = TimeSpan.FromSeconds(1);
+    private const string DashboardCacheKey = "dashboard_snapshot";
+
+    public DashboardService(
+        SampleRepository repo,
+        Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext,
+        IMemoryCache cache)
     {
         _repo = repo;
         _httpContext = httpContext;
+        _cache = cache;
     }
 
     /// <summary>
@@ -42,9 +53,17 @@ public class DashboardService
 
     /// <summary>
     /// Returns the current dashboard snapshot, or null if no samples exist yet.
+    /// 结果缓存 1s（缺陷 #6 修复）：前端每 2s 轮询，1s 缓存让 DB 查询数减半。
     /// </summary>
     public DashboardDto? GetDashboard()
     {
+        // 1s 缓存命中：直接返回，跳过所有 DB 查询
+        // 注：缓存命中时不计入 X-Db-Query-Time-Ms（该 header 反映本次请求的 DB 耗时）
+        if (_cache.TryGetValue(DashboardCacheKey, out DashboardDto? cached) && cached != null)
+        {
+            return cached;
+        }
+
         using var conn = _repo.OpenConnection();
         var dbSw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -119,10 +138,14 @@ public class DashboardService
             .Take(10)
             .ToList();
 
-        return new DashboardDto(
+        var result = new DashboardDto(
             DateTime.Parse(latestTs, null, System.Globalization.DateTimeStyles.AssumeLocal),
             system, topCpu, topMem, topIo
         );
+
+        // 写入缓存（1s 后过期）
+        _cache.Set(DashboardCacheKey, result, DashboardCacheTtl);
+        return result;
     }
 
     /// <summary>
