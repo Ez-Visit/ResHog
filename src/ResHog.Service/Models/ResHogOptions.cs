@@ -43,11 +43,8 @@ public class RetentionOptions
     /// <summary>Days to retain raw sampling data before purging.</summary>
     public int RawDataDays { get; set; } = 2;
 
-    /// <summary>Days to retain minute-level aggregations.</summary>
+    /// <summary>Days to retain minute-level aggregations and alerts.</summary>
     public int MinuteAggregationDays { get; set; } = 7;
-
-    /// <summary>Days to retain hour-level aggregations.</summary>
-    public int HourAggregationDays { get; set; } = 7;
 }
 
 public class AlertOptions

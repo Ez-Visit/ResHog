@@ -8,9 +8,10 @@ namespace ResHog.Analysis;
 internal static class QueryHelpers
 {
     /// <summary>
-    /// Resolves a range string ("1h", "24h", "7d", "30d", "90d") to the appropriate
+    /// Resolves a range string ("1h", "24h", "7d") to the appropriate
     /// table name, timestamp column, and ISO 8601 cutoff string.
-    /// Short ranges use raw samples; longer ranges use minute/hour aggregations for performance.
+    /// Short ranges use raw samples; longer ranges use minute aggregation for performance.
+    /// 注：30d/90d 选项已从 UI 移除，samples_hour 表已删除（v4 迁移）。
     /// </summary>
     internal static (string Table, string TimeColumn, string Since) ResolveRange(string range)
     {
@@ -25,11 +26,9 @@ internal static class QueryHelpers
             // Floor to the minute boundary so the earliest in-range minute is not excluded
             // by trailing second digits, and the value matches idx_min_minute exactly.
             "24h" => ("samples_minute", "minute", FloorToMinute(now.AddHours(-24))),
-            // Hour aggregation: hour stored as "yyyy-MM-ddTHH:00:00".
-            "7d" => ("samples_hour", "hour", FloorToHour(now.AddDays(-7))),
-            "30d" => ("samples_minute", "minute", FloorToMinute(now.AddDays(-30))),
-            // Hour aggregation: hour stored as "yyyy-MM-ddTHH:00:00".
-            "90d" => ("samples_hour", "hour", FloorToHour(now.AddDays(-90))),
+            // 7d 也走 samples_minute（设计文档 retention-policy-optimization.md 指定）
+            // samples_minute 保留 7 天，覆盖 7d 查询范围；每分钟聚合 1 次，启动 1 分钟后即有数据
+            "7d" => ("samples_minute", "minute", FloorToMinute(now.AddDays(-7))),
             _ => ("samples", "timestamp", FloorToSecond(now.AddHours(-1)))
         };
     }
@@ -41,9 +40,6 @@ internal static class QueryHelpers
     // samples_minute.minute is "yyyy-MM-ddTHH:mm:00"; floor to the minute boundary so the
     // earliest in-range minute is not excluded by the trailing second digits.
     private static string FloorToMinute(DateTime dt) => dt.ToString("yyyy-MM-ddTHH:mm") + ":00";
-
-    // samples_hour.hour is "yyyy-MM-ddTHH:00:00"; floor to the hour boundary.
-    private static string FloorToHour(DateTime dt) => dt.ToString("yyyy-MM-ddTHH") + ":00:00";
 
     /// <summary>
     /// Returns true when the resolved table is the raw samples table (vs an aggregation table).
