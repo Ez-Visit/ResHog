@@ -84,6 +84,10 @@ jobs:
           Copy-Item -Path "deploy/uninstall.ps1" -Destination $releaseDir
           Copy-Item -Path "deploy/appsettings.template.json" -Destination $releaseDir
 
+          # 复制数据库迁移脚本（install.ps1 启动时调用）
+          New-Item -ItemType Directory -Force -Path "$releaseDir/migrations"
+          Copy-Item -Path "deploy/migrations/*" -Destination "$releaseDir/migrations" -Recurse
+
           # 复制 README 和 LICENSE
           Copy-Item -Path "README.md" -Destination $releaseDir
           Copy-Item -Path "LICENSE" -Destination $releaseDir
