@@ -1,0 +1,36 @@
+-- ============================================================
+-- v2 -> v3 迁移：WITHOUT ROWID 重构（缺陷 #9）
+-- ============================================================
+--
+-- 重要：此文件是文档参考，实际迁移逻辑在 migrate.ps1 中实现。
+--
+-- 迁移策略：清库重建（用户已确认历史数据可接受丢失）
+-- 1. 备份旧库到 data.db.v2backup
+-- 2. 删除 data.db / data.db-wal / data.db-shm
+-- 3. 服务启动时 SchemaSql 会以 v3 schema 创建新库：
+--    - samples 表改用 PRIMARY KEY (timestamp, process_name, pid, instance_name) WITHOUT ROWID
+--    - samples_minute 表改用 PRIMARY KEY (minute, process_name) WITHOUT ROWID
+--    - samples_hour 表改用 PRIMARY KEY (hour, process_name) WITHOUT ROWID
+--    - 移除 id 列（无业务用途，全项目无 WHERE id = ? 查询）
+--    - 移除冗余索引（idx_samples_ts / idx_min_minute / idx_min_name_minute / idx_hour_hour / idx_hour_name_hour）
+-- 4. schema_version 表由 SchemaSql 初始化为 v3
+--
+-- 预期收益：
+-- - 写入热点分散：从单一末尾页变为按 timestamp 分散到多个 B-tree 页
+-- - 存储开销减少：每行省 8 字节 rowid，1100 万行约省 84MB
+-- - 写入放大降低：samples 表索引从 3 个降到 2 个
+-- - 查询性能提升：主键首列 timestamp 支持范围查询走聚簇索引
+--
+-- 风险：
+-- - 历史数据丢失（用户已确认）
+-- - 主键冲突：同 timestamp + process_name + pid + instance_name 的重复样本
+--   由 BulkInsert 的 INSERT OR IGNORE 静默丢弃（监控场景可接受）
+--
+-- 回滚方案：
+-- - 从 data.db.v2backup 恢复旧库
+-- - 还原 SampleRepository.cs 到 v2 版本（含 id 列和 AUTOINCREMENT）
+-- ============================================================
+
+-- 此文件不包含可执行 SQL，迁移逻辑由 migrate.ps1 的 PowerShell 代码实现
+-- 保留此文件是为了文档完整性和版本追踪
+SELECT 1; -- 占位语句，实际不执行

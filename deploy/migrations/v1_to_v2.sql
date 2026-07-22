@@ -1,0 +1,27 @@
+-- ============================================================
+-- ResHog 数据库迁移：v1 → v2
+-- 描述：删除废弃的 p95_cpu / p95_mem_mb 列（缺陷 #13）
+-- 背景：AggregateLastMinute 从不写入这两列（恒为 DEFAULT 0），
+--       导致磁盘浪费 + 混淆维护者。
+-- 前置条件：SQLite 3.35+（Microsoft.Data.Sqlite 7.0+ 内置 3.43+ 支持 ALTER TABLE DROP COLUMN）
+--
+-- 执行方：deploy/migrations/migrate.ps1
+-- 执行时机：install.ps1 部署阶段（服务启动前）
+--
+-- 幂等性说明：
+--   本 .sql 文件仅作为迁移文档参考。
+--   实际执行由 migrate.ps1 中的 Test-ColumnExists + ALTER TABLE DROP COLUMN 完成。
+--   SQLite 原生不支持 DROP COLUMN IF EXISTS 语法，必须先 PRAGMA table_info 检查列存在性。
+--
+--   兼容场景处理：
+--   - 新库（SchemaSql 创建时无此列）：Test-ColumnExists 返回 false，跳过 DROP
+--   - 老库已通过 EnsureIndexes 路径清理过：schema_version=2 但列已不存在，
+--     migrate.ps1 仍执行 Test-ColumnExists 检查，若不存在则跳过，最终确保一致性
+-- ============================================================
+
+-- 注意：实际执行时由 migrate.ps1 逐列检查并执行，本文件仅为文档参考
+-- 实际执行语句：
+-- ALTER TABLE samples_minute DROP COLUMN p95_cpu;
+-- ALTER TABLE samples_minute DROP COLUMN p95_mem_mb;
+
+-- schema_version 记录由 migrate.ps1 写入，不在本文件中。

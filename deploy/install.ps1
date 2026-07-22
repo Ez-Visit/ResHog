@@ -28,6 +28,14 @@ $ErrorActionPreference = "Stop"
 $ServiceName = "ResHog"
 $ServiceExe = Join-Path $InstallDir "ResHog.Service.exe"
 
+# 安装日志文件（setup.exe 吞掉了 stdout，用文件日志排查安装失败点）
+$InstallLog = Join-Path $DataDir "logs\install.log"
+function Write-InstallLog([string]$Message) {
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+    $line = "[$ts] $Message"
+    try { Add-Content -Path $InstallLog -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+}
+
 # 步骤日志辅助函数
 $stepCount = 0
 function Write-Step([string]$title) {
@@ -35,10 +43,11 @@ function Write-Step([string]$title) {
     Write-Host ""
     Write-Host "[$script:stepCount/$script:totalSteps] $title" -ForegroundColor Green
     Write-Host "    (Step $script:stepCount)" -ForegroundColor DarkGray
+    Write-InstallLog "STEP $script:stepCount: $title"
 }
 
 # 统计总步骤数（用于日志标记）
-$totalSteps = 8
+$totalSteps = 9
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -46,13 +55,33 @@ Write-Host "  ResHog Installer" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
+Write-InstallLog "=== Install.ps1 started ==="
+Write-InstallLog "InstallDir=$InstallDir"
+Write-InstallLog "DataDir=$DataDir"
+Write-InstallLog "ServiceExe=$ServiceExe"
+
+try {
+
 # 1. Remove existing service if present
 $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existingService) {
     Write-Host "[!] Existing ResHog service found, removing old version..." -ForegroundColor Yellow
     Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-    sc.exe delete $ServiceName | Out-Null
+    # 等待服务真正停止 + SQLite 释放数据库锁
+    # 8GB 老库的 SQLite 进程可能需要 10+ 秒做 checkpoint 才能释放文件锁
+    # 不等待会导致 migrate.ps1 遇到 "disk I/O error" 或 "database is locked"
+    $waited = 0
+    $maxWait = 30
+    while ($waited -lt $maxWait) {
+        $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if ($null -eq $svc -or $svc.Status -eq "Stopped") { break }
+        Start-Sleep -Seconds 1
+        $waited++
+    }
+    Write-Host "    -> Service stopped (waited ${waited}s)"
+    # 额外等待 2s 确保 SQLite 文件句柄完全释放
     Start-Sleep -Seconds 2
+    sc.exe delete $ServiceName | Out-Null
 }
 
 # 2. Create directories
@@ -90,12 +119,56 @@ if (Test-Path "$scriptDir\ui") {
     Write-Host "    Skipping UI client installation" -ForegroundColor Yellow
 }
 
-# 4. Generate config file from template
+# 4. Run database migrations (idempotent, before service starts)
+#
+# 重要：迁移必须在服务停止后、新服务启动前执行
+# - 服务停止后 SQLite 文件锁释放，migrate.ps1 才能安全操作数据库
+# - 迁移失败必须中止安装，否则服务会以错误的 schema 启动导致数据不一致
+#   （历史教训：migrate.ps1 失败被吞掉，导致 schema_version 报告 v3 但表结构是 v1）
+Write-Step "Running database migrations"
+$migrateScript = Join-Path $scriptDir "migrations\migrate.ps1"
+$dbPath = Join-Path $DataDir "data.db"
+Write-InstallLog "migrateScript=$migrateScript (exists=$(Test-Path $migrateScript))"
+Write-InstallLog "dbPath=$dbPath (exists=$(Test-Path $dbPath))"
+if (Test-Path $migrateScript) {
+    # 把 migrations 目录也复制到安装目录（保持与 Payload 结构一致）
+    $installMigrationsDir = Join-Path $InstallDir "migrations"
+    if (-not (Test-Path $installMigrationsDir)) {
+        New-Item -ItemType Directory -Force -Path $installMigrationsDir | Out-Null
+    }
+    Copy-Item "$scriptDir\migrations\*" $installMigrationsDir -Recurse -Force
+
+    # 执行迁移脚本（独立于服务启动路径，确保一次性 schema 变更不进入服务初始化代码）
+    # 重要：必须用 `powershell -File` 在子进程中运行，而不是 `& $migrateScript`
+    # 因为 migrate.ps1 末尾有 `exit` 语句，PowerShell 的 `&` 调用会让 exit 终止
+    # 整个 PowerShell 会话（包括 install.ps1），导致后续步骤不会执行。
+    # 子进程方式下，exit 只退出子进程，install.ps1 继续执行后续步骤。
+    Write-InstallLog "Launching migrate.ps1 in subprocess..."
+    & powershell -ExecutionPolicy Bypass -File $migrateScript -DbPath $dbPath -MigrationDir $installMigrationsDir
+    $migrateExit = $LASTEXITCODE
+    Write-InstallLog "migrate.ps1 exited with code=$migrateExit"
+    if ($migrateExit -ne 0) {
+        Write-Host "    -> [!] Database migration FAILED (exit code $migrateExit)" -ForegroundColor Red
+        Write-Host "    -> Aborting installation to prevent schema/version mismatch." -ForegroundColor Red
+        Write-Host "    -> Manual recovery: stop service, delete data.db, re-run installer." -ForegroundColor Yellow
+        Write-InstallLog "ABORT: migrate failed, exit $migrateExit"
+        exit $migrateExit
+    }
+    Write-Host "    -> Database migrations applied successfully"
+    Write-InstallLog "Migrate OK"
+} else {
+    Write-Host "    -> migrations\migrate.ps1 not found, skipping (fresh install or new database)" -ForegroundColor Yellow
+    Write-InstallLog "migrate.ps1 NOT FOUND, skipping"
+}
+
+# 5. Generate config file from template
 Write-Step "Configuring application"
 $configPath = Join-Path $InstallDir "appsettings.json"
 $templatePath = Join-Path $scriptDir "appsettings.template.json"
+Write-InstallLog "templatePath=$templatePath (exists=$(Test-Path $templatePath))"
 if (-not (Test-Path $templatePath)) {
     $templatePath = Join-Path $InstallDir "appsettings.template.json"
+    Write-InstallLog "fallback templatePath=$templatePath (exists=$(Test-Path $templatePath))"
 }
 
 if (Test-Path $configPath) {
@@ -110,25 +183,30 @@ if (Test-Path $configPath) {
     Write-Host "    -> [!] Config template not found, service will use defaults" -ForegroundColor Yellow
 }
 
-# 5. Register Windows service
+# 6. Register Windows service
 Write-Step "Registering Windows service"
 $binPath = "`"$ServiceExe`""
+Write-InstallLog "sc.exe create binPath=$binPath"
 sc.exe create $ServiceName binPath= $binPath start= auto DisplayName= "ResHog Resource Monitor" 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "sc.exe create failed with exit code $LASTEXITCODE (service may already exist)" }
+$createExit = $LASTEXITCODE
+Write-InstallLog "sc.exe create exit=$createExit"
+if ($createExit -ne 0) { throw "sc.exe create failed with exit code $createExit (service may already exist)" }
 
 sc.exe description $ServiceName "Monitors CPU, memory, and disk I/O usage of all processes for optimization analysis." 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "sc.exe description failed with exit code $LASTEXITCODE" }
 
-# 6. Configure service failure recovery (auto-restart on crash)
+# 7. Configure service failure recovery (auto-restart on crash)
 Write-Step "Configuring failure recovery"
 sc.exe failure $ServiceName reset= 86400 actions= restart/30000/restart/60000/restart/120000 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "sc.exe failure failed with exit code $LASTEXITCODE" }
 Write-Host "    -> Auto-restart on crash (30s/60s/120s)"
 
-# 7. Start service
+# 8. Start service
 Write-Step "Starting service"
+Write-InstallLog "sc.exe start $ServiceName"
 sc.exe start $ServiceName 2>&1 | Out-Null
 $startExitCode = $LASTEXITCODE
+Write-InstallLog "sc.exe start exit=$startExitCode"
 if ($startExitCode -ne 0 -and $startExitCode -ne 1056) {
     # 1056 = service already running, which is fine
     Write-Host "    -> sc start returned exit code $startExitCode (service may still be starting)" -ForegroundColor Yellow
@@ -156,7 +234,7 @@ if ($status -eq "Running") {
     Write-Host "    -> Debug mode: run '$ServiceExe --console' in a terminal" -ForegroundColor Yellow
 }
 
-# 8. Create shortcuts
+# 9. Create shortcuts
 Write-Step "Creating shortcuts"
 $uiExe = Join-Path $InstallDir "UI\ResHog.UI.exe"
 if (Test-Path $uiExe) {
@@ -181,9 +259,11 @@ if (Test-Path $uiExe) {
     }
 } else {
     Write-Host "    -> [!] UI client not found, skipping shortcuts" -ForegroundColor Yellow
+    Write-InstallLog "UI client not found, skipping shortcuts"
 }
 
 # Done
+Write-InstallLog "=== Install.ps1 completed, status=$status ==="
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  Installation complete!" -ForegroundColor Green
@@ -200,3 +280,15 @@ if (Test-Path $uiExe) {
 }
 Write-Host "Debug service:   Run '$ServiceExe --console' in a terminal"
 Write-Host ""
+
+} catch {
+    Write-InstallLog "FATAL EXCEPTION: $_"
+    Write-InstallLog "Stack: $($_.ScriptStackTrace)"
+    Write-Host ""
+    Write-Host "[!] INSTALL FAILED: $_" -ForegroundColor Red
+    Write-Host "    See install log: $InstallLog" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-InstallLog "Install.ps1 exiting with code 0"
+exit 0
