@@ -7,15 +7,16 @@ namespace ResHog.Storage;
 
 /// <summary>
 /// Purges expired data according to the retention policy:
-/// Raw data -> 2 days, Minute aggregation -> 7 days, Alerts -> 7 days.
+/// Raw data -> 1 day, Minute aggregation -> 7 days, Alerts -> 7 days.
 ///
 /// 实现要点（缺陷 #3 修复）：
 /// - samples 表用分块 DELETE（每块 10000 行），块间 Thread.Yield 让主循环获得写锁
 /// - 其他表（数据量小）整批 DELETE 但用事务包裹
-/// - incremental_vacuum 分离到 PurgeVacuum() 独立方法，每 7 天由 ResHogWorker 调度
+/// - incremental_vacuum 分离到 PurgeVacuum() 独立方法，每 1 天由 ResHogWorker 调度
 ///   避免与 purge 同周期叠加 WAL 压力
 ///
 /// v4 重构后：samples_hour 表已删除，不再需要 hour 清理逻辑。
+/// 磁盘优化方案 B/C：Raw data 2→1 天，vacuum 频率 7→1 天。
 /// </summary>
 public class RetentionService
 {

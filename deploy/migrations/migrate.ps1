@@ -241,7 +241,8 @@ $migrations = @(
     @{ From = 0; To = 1; File = "v0_to_v1.sql"; Description = "Drop legacy idx_samples_pid_ts index" },
     @{ From = 1; To = 2; File = "v1_to_v2.sql"; Description = "Drop unused p95_cpu / p95_mem_mb columns from samples_minute" },
     @{ From = 2; To = 3; File = "v2_to_v3.sql"; Description = "WITHOUT ROWID rebuild: backup old db, delete file, service recreates with v3 schema" },
-    @{ From = 3; To = 4; File = "v3_to_v4.sql"; Description = "Drop samples_hour table (no query path, superseded by samples_minute for 7d range)" }
+    @{ From = 3; To = 4; File = "v3_to_v4.sql"; Description = "Drop samples_hour table (no query path, superseded by samples_minute for 7d range)" },
+    @{ From = 4; To = 5; File = "v4_to_v5.sql"; Description = "Clean up dead config row retention_hour_days (v4 removed HourAggregationDays but config insert still wrote it)" }
 )
 
 $appliedCount = 0
@@ -344,6 +345,19 @@ foreach ($mig in $migrations) {
             Write-MigrateLog "Dropped index idx_hour_trend_covering (if existed)"
             Invoke-SqliteNonQuery -Sql "DROP TABLE IF EXISTS samples_hour;"
             Write-MigrateLog "Dropped table samples_hour (if existed)"
+        }
+
+        # ============================================================
+        # v4 -> v5: 清理 config 表中已废弃的 retention_hour_days 记录（幂等）
+        # ============================================================
+        # v4 重构删除了 samples_hour 表和 HourAggregationDays 配置项，但
+        # SchemaSql 的 config INSERT 仍写入 retention_hour_days（已修复）。
+        # 本迁移清理老库中残留的该记录，避免误导维护者。
+        # 幂等：DELETE 不存在的行无副作用。
+        # ============================================================
+        if ($mig.To -eq 5) {
+            Invoke-SqliteNonQuery -Sql "DELETE FROM config WHERE key = 'retention_hour_days';"
+            Write-MigrateLog "Cleaned up dead config row retention_hour_days (if existed)"
         }
 
         # 记录 schema_version（INSERT OR IGNORE 保证幂等）

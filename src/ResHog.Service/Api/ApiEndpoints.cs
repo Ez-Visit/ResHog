@@ -49,7 +49,7 @@ public static class ApiEndpoints
                     (long)uptime.TotalSeconds,
                     stats.SampleCount,
                     stats.MonitoredProcesses,
-                    "0.2.2"
+                    "0.2.4"
                 ));
             }
             catch (Exception ex)

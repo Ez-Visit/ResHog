@@ -63,7 +63,7 @@
                                FontWeight="SemiBold"
                                Foreground="#555"
                                VerticalAlignment="Center" />
-                    <TextBlock Text="ResHog v0.2.2"
+                    <TextBlock Text="ResHog v0.2.4"
                                FontSize="11"
                                Foreground="#999"
                                VerticalAlignment="Center" />

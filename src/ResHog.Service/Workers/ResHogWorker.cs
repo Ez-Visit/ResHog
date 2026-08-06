@@ -191,10 +191,12 @@ public class ResHogWorker : BackgroundService
                         }
                     }
 
-                    // 6. Periodic incremental vacuum (every 7 days) — separated from purge
+                    // 6. Periodic incremental vacuum (every 1 day) — separated from purge
                     //    to avoid stacking WAL pressure (DELETE + vacuum in one cycle).
                     //    incremental_vacuum reclaims free pages from auto_vacuum=INCREMENTAL.
-                    if (DateTime.Now - lastVacuum > TimeSpan.FromDays(7))
+                    //    频率从 7 天提到 1 天（磁盘优化方案 C）：让 purge 产生的空闲页
+                    //    能在 24h 内被回收，避免 data.db 文件只增不减的膨胀现象。
+                    if (DateTime.Now - lastVacuum > TimeSpan.FromDays(1))
                     {
                         lastVacuum = DateTime.Now;
                         if (Interlocked.CompareExchange(ref _vacuumBusy, 1, 0) == 0)

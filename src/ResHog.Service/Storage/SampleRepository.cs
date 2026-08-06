@@ -587,10 +587,9 @@ public class SampleRepository
         );
 
         INSERT OR IGNORE INTO config (key, value) VALUES
-            ('sample_interval_sec', '2'),
-            ('retention_raw_days', '2'),
+            ('sample_interval_sec', '3'),
+            ('retention_raw_days', '1'),
             ('retention_minute_days', '7'),
-            ('retention_hour_days', '7'),
             ('alert_cpu_warning', '30'),
             ('alert_cpu_critical', '60'),
             ('alert_memory_warning_mb', '512'),

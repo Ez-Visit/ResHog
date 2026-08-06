@@ -98,7 +98,7 @@ public class AggregationService
     /// 4. 从 MAX(minute) 到 FloorToMinute(MAX(timestamp)) 逐分钟补录
     ///
     /// 限制：
-    /// - 补录范围最多 2 天（与 samples 保留期一致），避免扫描已删除的原始数据
+    /// - 补录范围最多 1 天（与 samples 保留期一致，RawDataDays=1），避免扫描已删除的原始数据
     /// - 如果 samples 表为空（新库），跳过补录
     /// - 如果 samples_minute 比 samples 更新（异常情况），跳过补录
     ///
@@ -145,11 +145,11 @@ public class AggregationService
         var backfillStart = latestAggregated.AddMinutes(1);
         var backfillEnd = latestRaw;
 
-        // 限制补录范围最多 2 天（与 samples 保留期一致）
-        var maxBackfillStart = backfillEnd.AddDays(-2);
+        // 限制补录范围最多 1 天（与 samples 保留期一致，RawDataDays=1）
+        var maxBackfillStart = backfillEnd.AddDays(-1);
         if (backfillStart < maxBackfillStart)
         {
-            _logger.LogWarning("Backfill range exceeds 2 days, truncating to {Start}", maxBackfillStart);
+            _logger.LogWarning("Backfill range exceeds 1 day, truncating to {Start}", maxBackfillStart);
             backfillStart = maxBackfillStart;
         }
 
@@ -179,7 +179,7 @@ public class AggregationService
     ///   - 幂等：先 DELETE 同范围已存在的 samples_minute 记录，再 INSERT
     ///   - 每分钟一个批次，批次间 Thread.Yield 避免长事务阻塞主循环
     ///
-    /// 限制：补录范围最多 2 天（与 samples 原始表保留期一致），
+    /// 限制：补录范围最多 1 天（与 samples 原始表保留期一致，RawDataDays=1），
     ///       超出保留期的补录无意义（原始数据已删除）。
     /// </summary>
     /// <param name="since">补录起始时间（包含），必须早于 now</param>
