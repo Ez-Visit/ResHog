@@ -39,8 +39,8 @@ jobs:
 
       - name: Build
         run: |
-          dotnet restore ResHog.sln
-          dotnet build ResHog.sln -c Release --no-restore
+          dotnet restore ResHog.slnx
+          dotnet build ResHog.slnx -c Release
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

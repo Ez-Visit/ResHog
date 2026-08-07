@@ -58,11 +58,8 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Install dotnet-format
-        run: dotnet tool install -g dotnet-format
-
       - name: Check formatting
-        run: dotnet-format ResHog.slnx --verify-no-changes --severity warn
+        run: dotnet format ResHog.slnx --verify-no-changes --severity warn
 
   analyze:
     name: Code Analysis
