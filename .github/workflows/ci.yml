@@ -29,13 +29,13 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore dependencies
-        run: dotnet restore ResHog.sln
+        run: dotnet restore ResHog.slnx
 
       - name: Build
-        run: dotnet build ResHog.sln -c Release --no-restore -warnaserror
+        run: dotnet build ResHog.slnx -c Release --no-restore -warnaserror
 
       - name: Run tests
-        run: dotnet test ResHog.sln -c Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
+        run: dotnet test ResHog.slnx -c Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
 
       - name: Upload coverage
         if: always()
@@ -62,7 +62,7 @@ jobs:
         run: dotnet tool install -g dotnet-format
 
       - name: Check formatting
-        run: dotnet-format ResHog.sln --verify-no-changes --severity warn
+        run: dotnet-format ResHog.slnx --verify-no-changes --severity warn
 
   analyze:
     name: Code Analysis
@@ -80,7 +80,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore ResHog.sln
+        run: dotnet restore ResHog.slnx
 
       - name: Run analyzers
-        run: dotnet build ResHog.sln -c Release --no-restore /p:TreatWarningsAsErrors=true /p:EnforceCodeStyleInBuild=true
+        run: dotnet build ResHog.slnx -c Release --no-restore /p:TreatWarningsAsErrors=true /p:EnforceCodeStyleInBuild=true

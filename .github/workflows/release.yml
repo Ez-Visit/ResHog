@@ -51,7 +51,7 @@ jobs:
         run: echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
 
       - name: Restore dependencies
-        run: dotnet restore ResHog.sln
+        run: dotnet restore ResHog.slnx
 
       - name: Publish Service
         run: |
