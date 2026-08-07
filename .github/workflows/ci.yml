@@ -32,10 +32,10 @@ jobs:
         run: dotnet restore ResHog.slnx
 
       - name: Build
-        run: dotnet build ResHog.slnx -c Release --no-restore -warnaserror
+        run: dotnet build ResHog.slnx -c Release -warnaserror
 
       - name: Run tests
-        run: dotnet test ResHog.slnx -c Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
+        run: dotnet test ResHog.slnx -c Release --verbosity normal --collect:"XPlat Code Coverage"
 
       - name: Upload coverage
         if: always()
@@ -83,4 +83,4 @@ jobs:
         run: dotnet restore ResHog.slnx
 
       - name: Run analyzers
-        run: dotnet build ResHog.slnx -c Release --no-restore /p:TreatWarningsAsErrors=true /p:EnforceCodeStyleInBuild=true
+        run: dotnet build ResHog.slnx -c Release /p:TreatWarningsAsErrors=true /p:EnforceCodeStyleInBuild=true

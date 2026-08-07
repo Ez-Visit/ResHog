@@ -1,10 +1,10 @@
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using ResHog.Analysis;
 using ResHog.Collectors;
 using ResHog.Models;
 using ResHog.Storage;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace ResHog.Workers;
 

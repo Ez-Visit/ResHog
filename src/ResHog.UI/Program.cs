@@ -1,6 +1,6 @@
-using Avalonia;
 using System;
 using System.Threading;
+using Avalonia;
 
 namespace ResHog.UI;
 

@@ -91,10 +91,10 @@ try
 
     // Required for per-request SQL timing propagation via HttpContext.Items.
     builder.Services.AddHttpContextAccessor();
-// 内存缓存（缺陷 #6 修复）：用于 DashboardService 的 1s 缓存，减少 DB 重复查询
-// 注：不用 AddResponseCaching，它需要中间件配合且对源生成 JSON 不友好；
-//     ResHog 是单机单进程服务，IMemoryCache 足够。
-builder.Services.AddMemoryCache();
+    // 内存缓存（缺陷 #6 修复）：用于 DashboardService 的 1s 缓存，减少 DB 重复查询
+    // 注：不用 AddResponseCaching，它需要中间件配合且对源生成 JSON 不友好；
+    //     ResHog 是单机单进程服务，IMemoryCache 足够。
+    builder.Services.AddMemoryCache();
 
     // --- Configure Kestrel: localhost-only for security (no network exposure) ---
     var apiPort = builder.Configuration.GetValue<int>($"{ResHogOptions.SectionName}:Api:Port", 5180);

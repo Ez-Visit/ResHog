@@ -1,8 +1,8 @@
+using System.Data;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using ResHog.Models;
-using System.Data;
-using System.Text;
 
 namespace ResHog.Storage;
 

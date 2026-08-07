@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
-using ResHog.Native;
 using ResHog.Models;
+using ResHog.Native;
 
 namespace ResHog.Collectors;
 
