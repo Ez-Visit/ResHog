@@ -45,6 +45,14 @@ public class RetentionOptions
 
     /// <summary>Days to retain minute-level aggregations and alerts.</summary>
     public int MinuteAggregationDays { get; set; } = 7;
+
+    /// <summary>
+    /// Purge 调度周期（分钟）。只控制执行频率，cutoff 仍由 RawDataDays 决定。
+    /// 默认 60：表内数据峰值从 48h（24h 调度 + 24h cutoff）降为 ~25h，
+    /// 单次删除量从千万行级降为 ~44 万行，避免长事务写锁争用与 WAL 高水位。
+    /// （磁盘膨胀复发修复 P1，2026-09-02；历史值为 1440 即每日一次）
+    /// </summary>
+    public int PurgeIntervalMinutes { get; set; } = 60;
 }
 
 public class AlertOptions

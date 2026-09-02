@@ -27,18 +27,12 @@ public class ResHogWorker : BackgroundService
 
     // Guards so a slow background heavy task doesn't overlap the next trigger.
     private int _purgeBusy;
-    private int _vacuumBusy;
 
     // 待重试的 samples：BulkInsertWithRetry 重试耗尽后累积，下个周期合并写入。
     // 防止数据丢失：失败的批次进入队列等待下次机会。
     private readonly List<ProcessSample> _pendingRetrySamples = new();
     // 防止无限累积：超过此阈值则丢弃最老的（避免内存爆涨，按 200 进程 × 250 周期估算约 5 万行）
     private const int MaxPendingSamples = 50_000;
-
-    // 周期性 WAL checkpoint：缺陷 #4 修复
-    // PASSIVE 模式不阻塞读写，把可回收的 WAL 页写回主 db，控制 WAL 文件体积
-    private DateTime _lastWalCheckpoint = DateTime.Now;
-    private static readonly TimeSpan WalCheckpointInterval = TimeSpan.FromMinutes(10);
 
     public ResHogWorker(
         SampleCollector collector,
@@ -67,9 +61,13 @@ public class ResHogWorker : BackgroundService
         var lastAggregation = DateTime.Now;
         var lastRetention = DateTime.Now;
         var lastAlertCheck = DateTime.Now;
-        var lastVacuum = DateTime.Now;
         var sampleCount = 0L;
         var cycleCount = 0;
+
+        // Purge 调度周期（P1）：cutoff 仍由 RawDataDays 决定，本值只控制执行频率。
+        // 1h 一次让单次删除量降到 ~44 万行，避免千万行级长事务（17-40 分钟）。
+        var purgeInterval = TimeSpan.FromMinutes(
+            Math.Max(1, _options.Retention.PurgeIntervalMinutes));
 
         // 启动补录：恢复服务停止期间缺失的分钟聚合数据
         // 参考 TimescaleDB 的 refresh_continuous_aggregate 机制
@@ -167,11 +165,14 @@ public class ResHogWorker : BackgroundService
                         lastAggregation = DateTime.Now;
                     }
 
-                    // 5. Periodic retention purge (every 24 hours) — now chunked DELETE
-                    //    (see RetentionService.PurgeInChunks). Offload to the thread-pool
-                    //    so the chunked loop's per-chunk commits can interleave with
+                    // 5. Periodic retention purge — 磁盘膨胀复发修复（P1）：
+                    //    周期从 24h 降为 PurgeIntervalMinutes（默认 1h），cutoff 仍由
+                    //    RawDataDays 决定（不变）。表内数据峰值从 48h 降为 ~25h，
+                    //    单次删除量从千万行级降为 ~44 万行（秒级完成），写锁争用与
+                    //    WAL 压力同步缩小；purge 失败由 PurgeExpiredDataWithRetry 退避重试。
+                    //    Offload to the thread-pool so the purge can interleave with
                     //    BulkInsert without blocking the sampling cycle.
-                    if (DateTime.Now - lastRetention > TimeSpan.FromHours(24))
+                    if (DateTime.Now - lastRetention > purgeInterval)
                     {
                         lastRetention = DateTime.Now;
                         if (Interlocked.CompareExchange(ref _purgeBusy, 1, 0) == 0)
@@ -179,55 +180,28 @@ public class ResHogWorker : BackgroundService
                             _ = Task.Run(() =>
                             {
                                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                                try { _retention.PurgeExpiredData(); }
-                                catch (Exception ex) { _logger.LogError(ex, "Retention purge failed (background)"); }
+                                try
+                                {
+                                    if (_retention.PurgeExpiredDataWithRetry())
+                                    {
+                                        // purge 刚释放写锁，是 TRUNCATE 的最佳时机（P1）：
+                                        // 运行期 PASSIVE checkpoint 只推进不缩文件，
+                                        // WAL 文件收缩必须靠显式 TRUNCATE。
+                                        _retention.TruncateWal();
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "Retention purge task failed (background)");
+                                }
                                 finally
                                 {
                                     sw.Stop();
-                                    _logger.LogInformation("Retention purge completed in {Ms}ms", sw.ElapsedMilliseconds);
+                                    _logger.LogInformation("Retention purge cycle completed in {Ms}ms", sw.ElapsedMilliseconds);
                                     Interlocked.Exchange(ref _purgeBusy, 0);
                                 }
                             });
                         }
-                    }
-
-                    // 6. Periodic incremental vacuum (every 1 day) — separated from purge
-                    //    to avoid stacking WAL pressure (DELETE + vacuum in one cycle).
-                    //    incremental_vacuum reclaims free pages from auto_vacuum=INCREMENTAL.
-                    //    频率从 7 天提到 1 天（磁盘优化方案 C）：让 purge 产生的空闲页
-                    //    能在 24h 内被回收，避免 data.db 文件只增不减的膨胀现象。
-                    if (DateTime.Now - lastVacuum > TimeSpan.FromDays(1))
-                    {
-                        lastVacuum = DateTime.Now;
-                        if (Interlocked.CompareExchange(ref _vacuumBusy, 1, 0) == 0)
-                        {
-                            _ = Task.Run(() =>
-                            {
-                                try { _retention.PurgeVacuum(); }
-                                catch (Exception ex) { _logger.LogError(ex, "Vacuum failed (background)"); }
-                                finally { Interlocked.Exchange(ref _vacuumBusy, 0); }
-                            });
-                        }
-                    }
-
-                    // 8. Periodic WAL checkpoint (every 10 minutes) — 缺陷 #4 修复
-                    //    PASSIVE 模式：不阻塞读者/写者，只把可回收的 WAL 页写回主 db。
-                    //    配合 SampleRepository 启动时的 TRUNCATE，稳定控制 WAL 体积。
-                    if (DateTime.Now - _lastWalCheckpoint > WalCheckpointInterval)
-                    {
-                        _lastWalCheckpoint = DateTime.Now;
-                        _ = Task.Run(() =>
-                        {
-                            try
-                            {
-                                using var conn = _repository.OpenConnection();
-                                conn.ExecuteNonQuery("PRAGMA wal_checkpoint(PASSIVE);");
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "Periodic WAL checkpoint failed (non-critical)");
-                            }
-                        });
                     }
                 }
 

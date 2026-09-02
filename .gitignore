@@ -88,6 +88,9 @@ deploy/SetupUI/Payload.zip
 ### WorkBuddy 工作区数据
 .workbuddy/
 
+### 第三方编程智能体缓存
+.reasonix/
+
 ### 敏感配置
 appsettings.Development.json
 appsettings.Local.json
