@@ -103,6 +103,12 @@ public class TrendAnalyzer
         // 避免原来单独的 SELECT DISTINCT pid FROM samples 二次扫描（同范围 ~1800 行/进程）。
         // 注：SQLite 的 GROUP_CONCAT 默认上限 1MB（SQLITE_LIMIT_LENGTH），单进程 1h 内 PID 数
         // 有限（通常 <10），不会触及上限。
+        //
+        // P0-1（2026-09-03）：pid_list 仅在 raw samples 表上合法。samples_minute 没有
+        // pid 列，而 SQLite 在语句编译期做名称解析——引用不存在的列直接抛
+        // "no such column: pid"（并非运行期返回 NULL），曾导致 /api/process/{name}
+        // 在 24h/7d（默认 24h）下必然 500。聚合表分支的 SELECT 不含该列，pids 为空。
+        var pidSelect = isRaw ? ",\n                GROUP_CONCAT(DISTINCT pid) as pid_list" : "";
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT
@@ -117,8 +123,7 @@ public class TrendAnalyzer
                 AVG({ioReadCol}) as avg_io_read,
                 AVG({ioWriteCol}) as avg_io_write,
                 MAX({threadCol}) as max_threads,
-                MAX({handleCol}) as max_handles,
-                GROUP_CONCAT(DISTINCT pid) as pid_list
+                MAX({handleCol}) as max_handles{pidSelect}
             FROM {table}
             WHERE process_name = @name AND {timeCol} >= @since
             """;
@@ -129,7 +134,8 @@ public class TrendAnalyzer
         if (!reader.Read() || reader.GetInt64(1) == 0) return null;
 
         // 解析 pid_list（逗号分隔字符串 → List<int>，仅 raw samples 表有 pid 列）
-        // samples_minute / samples_hour 表无 pid 列，GROUP_CONCAT(DISTINCT pid) 返回 NULL
+        // P0-1：samples_minute 无 pid 列，聚合表分支的 SQL 不含该列（SELECT 共 12 列）；
+        // 下方 isRaw 短路保证聚合表分支不会访问不存在的第 13 列。
         List<int> pids = [];
         if (isRaw && !reader.IsDBNull(12))
         {

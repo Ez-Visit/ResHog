@@ -16,8 +16,10 @@ public class DashboardService
     private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
     private readonly IMemoryCache _cache;
 
-    // GetProcessNames runs SELECT DISTINCT process_name FROM samples (a multi-million-row
-    // scan). The UI autocomplete calls /api/processes frequently, so cache the result.
+    // P3-7（2026-09-03）：GetProcessNames 的 DISTINCT 来源由 samples（raw，千万行级）
+    // 改为 samples_minute（7 天 × 分钟级 ≈ 200 万行）。进程覆盖等价，前提约束：
+    // MinuteAggregationDays ≥ RawDataDays（当前 7 ≥ 1 成立）；若保留期调整需重新评估。
+    // The UI autocomplete calls /api/processes frequently, so cache the result.
     private List<string>? _cachedProcessNames;
     private DateTime _processNamesCachedAt;
     private static readonly TimeSpan ProcessNamesCacheTtl = TimeSpan.FromMinutes(5);
@@ -151,6 +153,7 @@ public class DashboardService
     /// <summary>
     /// Returns the distinct list of process names that have been sampled
     /// (for UI autocomplete when selecting a process for trend analysis).
+    /// P3-7：数据源为 samples_minute（约 200 万行），替代 raw samples 的千万行级扫描。
     /// </summary>
     public List<string> GetProcessNames()
     {
@@ -168,7 +171,7 @@ public class DashboardService
         var dbSw = System.Diagnostics.Stopwatch.StartNew();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT DISTINCT process_name FROM samples
+            SELECT DISTINCT process_name FROM samples_minute
             ORDER BY process_name
             """;
 

@@ -48,25 +48,26 @@ public class TopNAnalyzer
 
         // CRITICAL perf hint. This query groups by process_name over a time RANGE
         // (WHERE {timeCol} >= @since) but has NO process_name equality filter.
-        // SQLite's optimizer preferentially picks idx_<table>_name_<time> (leading
-        // column = process_name) to satisfy GROUP BY without a sort, which forces a
-        // FULL index scan of the whole (multi-million-row) table — measured at
-        // ~6-7s for 24h. The minute/second-leading index (idx_min_minute /
-        // idx_samples_ts) lets the range become a SEEK instead, cutting the scan to
-        // only the in-range rows (~6x faster, identical Top-N results). We pin it
-        // explicitly because the cost model otherwise chooses the wrong plan.
-        // v4 重构后 samples_hour 表已删除，7d 查询也走 samples_minute。
-        var indexHint = isRaw ? "idx_samples_ts_covering" : "idx_min_covering";
-        var indexClause = $"\nFROM {table} INDEXED BY {indexHint}";
+        // SQLite's optimizer preferentially picks the name-leading index
+        // (idx_samples_name_ts / idx_min_trend_covering, ANY(process_name)) to satisfy
+        // GROUP BY without a sort, which forces a FULL index scan of the whole
+        // (multi-million-row) table — measured at ~6-7s for 24h.
+        //
+        // P2-5(2026-09-03):以 GROUP BY +process_name 替代 INDEXED BY 钉计划。
+        // '+' 一元操作符阻止优化器用 process_name 的索引序满足 GROUP BY,逼其走
+        // 时间前缀索引/PK 的范围扫描 + 临时 B-tree 排序。生产库(1.49M 分钟行/2.1GB)
+        // 实测:与 INDEXED BY 方案计划完全一致,耗时相当(raw 1h 略快);
+        // 同时消除 INDEXED BY 在索引被迁移删除时直接抛错的 fail-closed 风险。
+        // 该防跑偏不可省:无防护时优化器必选 name 前缀索引全扫。
         cmd.CommandText = $"""
             SELECT process_name,
                    MAX(service_name) as service_name,
                    AVG({valCol}) as avg_value,
                    MAX({valCol}) as max_value,
                    AVG({secCol}) as secondary
-            {indexClause}
+            FROM {table}
             WHERE {timeCol} >= @since
-            GROUP BY process_name
+            GROUP BY +process_name
             ORDER BY avg_value DESC
             LIMIT @limit
             """;

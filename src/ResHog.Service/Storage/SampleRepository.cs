@@ -50,8 +50,11 @@ public class SampleRepository
         conn.ExecuteNonQuery("PRAGMA busy_timeout = 15000;");
         // synchronous=NORMAL：WAL 模式下的推荐值，比默认 FULL 快 5-10×
         conn.ExecuteNonQuery("PRAGMA synchronous = NORMAL;");
-        // cache_size=512MB（负值表示 KB）：5G+ 表的读缓存基础
-        conn.ExecuteNonQuery("PRAGMA cache_size = -512000;");
+        // cache_size=64MB（负值表示 KB）：写事务脏页需求足够。
+        // P1-2（2026-09-03）：读缓存由下方 mmap_size=2GB（文件映射、进程内共享）承担，
+        // 512MB 页缓存在 Pooling=true、每操作一连接的模式下会让池内每个物理连接
+        // 独立持有大缓存，并发读+写+purge 时内存可膨胀到 GB 级，故降为 64MB。
+        conn.ExecuteNonQuery("PRAGMA cache_size = -65536;");
         // mmap_size=2GB：内存映射读取，避免 read 系统调用
         conn.ExecuteNonQuery("PRAGMA mmap_size = 2147418112;");
         // wal_autocheckpoint=200：比默认 1000 更频繁触发 PASSIVE checkpoint
@@ -148,25 +151,17 @@ public class SampleRepository
     /// 注意：本方法仅负责索引的"创建"（CREATE IF NOT EXISTS，幂等且开销极小）。
     /// 一次性 schema 变更（DROP COLUMN / DROP INDEX 老库清理 / ALTER TABLE 等）
     /// 不放启动代码路径，由独立迁移脚本 deploy/migrations/migrate.ps1 在升级部署时执行。
+    ///
+    /// P2-5（2026-09-03）：idx_min_covering / idx_samples_ts_covering 已移除。
+    /// 两表均为 WITHOUT ROWID——表本身就是按 PK（时间前缀）聚簇的全量 B-tree，
+    /// 时间范围扫描天然"覆盖"、无回表；这两个与 PK 同序的 covering 索引不改变
+    /// 计划，却占 ~549MB（全库 26%）并对最热表造成近双倍写放大。
+    /// 配套：TopNAnalyzer 已改用 GROUP BY +process_name 防优化器跑偏（替代
+    /// INDEXED BY）；老库由 deploy/migrations/v4_to_v5.sql 执行 DROP INDEX。
+    /// 实测记录见 docs/sql-bugfix-plan-2026-09-03.md P2-5 节。
     /// </summary>
     private void EnsureIndexes(SqliteConnection conn)
     {
-        // Covering index for TopN queries on samples_minute: includes ALL columns
-        // that the TopN query reads, so SQLite never needs to go back to the table
-        // (zero "回表"). Measured ~7x faster than the non-covering alternative.
-        EnsureIndex(conn, "idx_min_covering", """
-            CREATE INDEX IF NOT EXISTS idx_min_covering
-            ON samples_minute(minute, process_name, service_name,
-                              avg_cpu, max_cpu, avg_mem_mb, avg_io_read_mb_s, avg_io_write_mb_s)
-            """);
-
-        // Covering index for the raw samples table on timestamp-first order.
-        EnsureIndex(conn, "idx_samples_ts_covering", """
-            CREATE INDEX IF NOT EXISTS idx_samples_ts_covering
-            ON samples(timestamp, process_name, service_name,
-                       cpu_percent, working_set_mb, io_read_mb_s, io_write_mb_s)
-            """);
-
         // Trend 路径覆盖索引（缺陷 #5 修复，对标 idx_min_covering）：
         // 查询模式 SELECT minute, AVG(avg_cpu) FROM samples_minute
         //   WHERE process_name = ? AND minute >= ? GROUP BY minute
@@ -341,16 +336,23 @@ public class SampleRepository
     }
 
     /// <summary>
-    /// 包装 BulkInsert，对 SQLITE_BUSY 做有限次指数退避重试。
-    /// 即使退避耗尽也不无限等待，避免拖死主循环；调用方根据返回值决定是否入待重试队列。
-    /// 重试间隔 100ms / 500ms / 2000ms，最长阻塞约 2.6 秒（含 BulkInsert 本身耗时）。
+    /// 包装 BulkInsert,对 SQLITE_BUSY 做有限次重试(P2-4,2026-09-03)。
+    ///
+    /// busy_timeout=15000 已在 SQLite 内部承担"等待锁"职责——SQLITE_BUSY 只在
+    /// 等满 busy_timeout 后才抛出,长退避 sleep 意义不大,只会拉长采样主循环的
+    /// 阻塞(采样/告警/聚合与写入串行在同一循环)。重试从 3 次降为 1 次:
+    /// 最坏阻塞 ≈ busy_timeout(15s) × 2 次尝试 + 100ms 退避。
+    /// (历史注释声称"最长阻塞约 2.6 秒"仅计了 sleep,未计 busy_timeout 内部等待,失实。)
+    ///
+    /// 重试耗尽返回 false,调用方将批次入待重试队列(上限 50000 行,带溢出保护),
+    /// 下个周期合并写入,不丢数据。
     /// </summary>
-    /// <returns>true 表示写入成功；false 表示重试耗尽仍未成功，调用方应入待重试队列</returns>
+    /// <returns>true 表示写入成功;false 表示重试耗尽仍未成功,调用方应入待重试队列</returns>
     public bool BulkInsertWithRetry(List<ProcessSample> samples, ILogger? logger = null)
     {
-        const int maxRetries = 3;
-        // 指数退避：100ms → 500ms → 2000ms
-        var delays = new[] { 100, 500, 2000 };
+        const int maxRetries = 1;
+        // P2-4:busy_timeout 内部已等待锁,仅保留一次短退避重试
+        var delays = new[] { 100 };
 
         for (int attempt = 0; ; attempt++)
         {
@@ -526,6 +528,8 @@ public class SampleRepository
         -- WHERE process_name = ? AND timestamp >= ? 需要 (process_name, timestamp) 顺序索引
         CREATE INDEX IF NOT EXISTS idx_samples_name_ts ON samples(process_name, timestamp);
         -- 注：idx_samples_ts 已移除（主键首列 timestamp 已是聚簇索引前缀）
+        -- 注：P2-5 移除 idx_samples_ts_covering（与 PK 同序的 covering 索引仅余写放大，
+        --     实测占 454MB；TopN 改走 PK 范围扫描 + GROUP BY +process_name）
         -- 注：idx_samples_pid_ts 已废弃（缺陷 #10）：全项目无 WHERE pid = ? 查询
 
         -- ============================================================
@@ -554,6 +558,8 @@ public class SampleRepository
         ) WITHOUT ROWID;
 
         -- 注：idx_min_minute / idx_min_name_minute 已移除（主键已覆盖）
+        -- 注：P2-5 移除 idx_min_covering（与 PK 同序的 covering 索引仅余写放大，
+        --     实测占 95MB；TopN 改走 PK 范围扫描 + GROUP BY +process_name）
 
         -- ============================================================
         -- Alert records
@@ -568,18 +574,26 @@ public class SampleRepository
             value           REAL    NOT NULL,
             threshold       REAL    NOT NULL,
             severity        TEXT    NOT NULL,
+            -- P3-6(2026-09-03)现状:全代码无 resolved=1 的更新路径,告警永不"恢复",
+            -- 冷却纯靠 AlertCooldownMin 时间窗。保留该列以兼容现有查询;
+            -- 支持"恢复"语义属未来需求。
             resolved        INTEGER DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_alerts_ts    ON alerts(timestamp);
         CREATE INDEX IF NOT EXISTS idx_alerts_name  ON alerts(process_name, timestamp);
-        -- Composite index for cooldown check: WHERE process_name=? AND metric=? AND timestamp>=? AND resolved=0
-        CREATE INDEX IF NOT EXISTS idx_alerts_name_metric_ts ON alerts(process_name, metric, timestamp);
         -- Composite index for filtered alert queries: WHERE timestamp>=? AND severity=?
         CREATE INDEX IF NOT EXISTS idx_alerts_ts_severity ON alerts(timestamp, severity);
+        -- P3-6:idx_alerts_name_metric_ts 已移除——cooldown 查询按 timestamp 范围过滤
+        -- (走 idx_alerts_ts / idx_alerts_ts_severity),首列 process_name 无等值条件
+        -- 用不上它,全项目亦无其他引用。老库由 deploy/migrations/v4_to_v5.sql 清理。
 
         -- ============================================================
         -- Configuration table
+        -- P3-6(2026-09-03):本表仅文档用途——全代码无 SELECT/UPDATE config,
+        -- 运行时实际配置以 appsettings.json(ResHogOptions)为准。
+        -- seed 值与 appsettings.json 当前部署值保持一致(INSERT OR IGNORE 仅对新库生效,
+        -- 老库旧值不覆盖)。
         -- ============================================================
         CREATE TABLE IF NOT EXISTS config (
             key     TEXT PRIMARY KEY,

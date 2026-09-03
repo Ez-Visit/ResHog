@@ -152,10 +152,12 @@ public class ResHogWorker : BackgroundService
                     }
 
                     // 4. Periodic aggregation (every minute)
+                    // P1-3：改为追赶式聚合——从 MAX(minute)+1 追到上一完整分钟，
+                    // 自愈运行期因聚合失败或主循环被写阻塞产生的中间缺口。
                     if (DateTime.Now - lastAggregation > TimeSpan.FromMinutes(1))
                     {
                         var aggSw = System.Diagnostics.Stopwatch.StartNew();
-                        _aggregation.AggregateLastMinute();
+                        _aggregation.AggregateCatchUp();
                         aggSw.Stop();
                         if (aggSw.ElapsedMilliseconds > 100)
                         {

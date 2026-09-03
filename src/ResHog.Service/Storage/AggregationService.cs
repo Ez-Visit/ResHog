@@ -89,6 +89,57 @@ public class AggregationService
     }
 
     /// <summary>
+    /// 追赶式聚合(P1-3,2026-09-03):运行期自愈"中间缺口"。
+    ///
+    /// 背景:AggregateLastMinute 只聚合 now-1min 单分钟,且异常被吞;若该分钟执行时
+    /// 失败或主循环被写锁风暴拖过一整分钟,会产生中间缺口。BackfillMissingMinutes 只用
+    /// MAX(minute) 探测尾部缺口,重启补录同样从 MAX+1 开始——中间缺口永久丢失,
+    /// 24h/7d 趋势图缺柱。
+    ///
+    /// 本方法从 MAX(minute)+1min 追到"上一个完整分钟"(与 AggregateLastMinute 的
+    /// [now-1min, now) 语义一致),复用幂等的 AggregateMinuteRange(DELETE+INSERT 同事务)。
+    /// 单次最多补 maxMinutesPerTick 分钟,剩余留给下个 tick,避免单次长阻塞。
+    /// </summary>
+    /// <returns>本次补录的分钟数(0 表示无缺口或 samples_minute 尚无数据)</returns>
+    public int AggregateCatchUp(int maxMinutesPerTick = 10)
+    {
+        DateTime latestAggregated;
+        using (var conn = _repository.OpenConnection())
+        {
+            using var aggCmd = conn.CreateCommand();
+            aggCmd.CommandText = "SELECT MAX(minute) FROM samples_minute";
+            var aggResult = aggCmd.ExecuteScalar();
+            if (aggResult is null || aggResult == DBNull.Value)
+            {
+                // samples_minute 为空(新库):首建由启动 BackfillMissingMinutes 负责
+                return 0;
+            }
+            latestAggregated = DateTime.Parse((string)aggResult);
+        }
+
+        // 待补范围:[latestAggregated+1min, Floor(now))
+        var since = new DateTime(
+            latestAggregated.Year, latestAggregated.Month, latestAggregated.Day,
+            latestAggregated.Hour, latestAggregated.Minute, 0).AddMinutes(1);
+        var now = DateTime.Now;
+        var endExclusive = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0);
+
+        if (since >= endExclusive) return 0;
+
+        var totalMissing = (int)(endExclusive - since).TotalMinutes;
+        var cappedEnd = totalMissing > maxMinutesPerTick
+            ? since.AddMinutes(maxMinutesPerTick)
+            : endExclusive;
+
+        var filled = AggregateMinuteRange(since, cappedEnd);
+        _logger.LogInformation(
+            "Catch-up aggregation filled {Filled}/{Missing} minutes ({Start} -> {End})",
+            filled, totalMissing,
+            since.ToString("yyyy-MM-ddTHH:mm"), cappedEnd.ToString("yyyy-MM-ddTHH:mm"));
+        return filled;
+    }
+
+    /// <summary>
     /// 启动时自动检测并补录缺失的分钟聚合数据。
     ///
     /// 检测逻辑：
