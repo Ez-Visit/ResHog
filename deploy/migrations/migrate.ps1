@@ -125,6 +125,12 @@ cur = conn.cursor()
 sql = sys.stdin.read()
 cur.execute(sql)
 
+# 缺陷修复(2026-09-03):python sqlite3 默认不自动提交,close() 时未 commit 的
+# INSERT/DELETE 会隐式回滚——schema_version 记录与 config 清理从未持久化
+# (证据:迁移后 MAX(version) 仍为旧值)。DDL 因 SQLite 隐式提交而不受影响。
+# 无条件 commit:SELECT 无活动事务时 commit 为空操作,无害。
+conn.commit()
+
 if ${Scalar}:
     row = cur.fetchone()
     print(row[0] if row and row[0] is not None else '')
@@ -242,7 +248,8 @@ $migrations = @(
     @{ From = 1; To = 2; File = "v1_to_v2.sql"; Description = "Drop unused p95_cpu / p95_mem_mb columns from samples_minute" },
     @{ From = 2; To = 3; File = "v2_to_v3.sql"; Description = "WITHOUT ROWID rebuild: backup old db, delete file, service recreates with v3 schema" },
     @{ From = 3; To = 4; File = "v3_to_v4.sql"; Description = "Drop samples_hour table (no query path, superseded by samples_minute for 7d range)" },
-    @{ From = 4; To = 5; File = "v4_to_v5.sql"; Description = "Clean up dead config row retention_hour_days (v4 removed HourAggregationDays but config insert still wrote it)" }
+    @{ From = 4; To = 5; File = "v4_to_v5.sql"; Description = "Clean up dead config row retention_hour_days (v4 removed HourAggregationDays but config insert still wrote it)" },
+    @{ From = 5; To = 6; File = "v5_to_v6.sql"; Description = "Drop redundant covering indexes idx_min_covering/idx_samples_ts_covering and unused idx_alerts_name_metric_ts (P2-5/P3-6)" }
 )
 
 $appliedCount = 0
@@ -358,6 +365,27 @@ foreach ($mig in $migrations) {
         if ($mig.To -eq 5) {
             Invoke-SqliteNonQuery -Sql "DELETE FROM config WHERE key = 'retention_hour_days';"
             Write-MigrateLog "Cleaned up dead config row retention_hour_days (if existed)"
+        }
+
+        # ============================================================
+        # v5 -> v6: 移除冗余 covering 索引 + 无引用告警索引（幂等）
+        # ============================================================
+        # P2-5: idx_min_covering / idx_samples_ts_covering 与 WITHOUT ROWID 主键
+        # (时间前缀聚簇)同序,不改变查询计划却占 ~549MB(生产实测)且双倍写放大;
+        # 查询层已改 GROUP BY +process_name 走 PK 范围扫描。
+        # P3-6: idx_alerts_name_metric_ts 无任何查询引用。
+        # 回退(回滚旧版二进制前必须重建,旧 TopNAnalyzer 依赖 INDEXED BY):
+        #   CREATE INDEX idx_min_covering ON samples_minute(minute, process_name,
+        #     service_name, avg_cpu, max_cpu, avg_mem_mb, avg_io_read_mb_s, avg_io_write_mb_s);
+        #   CREATE INDEX idx_samples_ts_covering ON samples(timestamp, process_name,
+        #     service_name, cpu_percent, working_set_mb, io_read_mb_s, io_write_mb_s);
+        if ($mig.To -eq 6) {
+            Invoke-SqliteNonQuery -Sql "DROP INDEX IF EXISTS idx_alerts_name_metric_ts;"
+            Write-MigrateLog "Dropped index idx_alerts_name_metric_ts (if existed)"
+            Invoke-SqliteNonQuery -Sql "DROP INDEX IF EXISTS idx_min_covering;"
+            Write-MigrateLog "Dropped index idx_min_covering (if existed)"
+            Invoke-SqliteNonQuery -Sql "DROP INDEX IF EXISTS idx_samples_ts_covering;"
+            Write-MigrateLog "Dropped index idx_samples_ts_covering (if existed)"
         }
 
         # 记录 schema_version（INSERT OR IGNORE 保证幂等）
