@@ -96,14 +96,18 @@ public class AggregationService
     /// MAX(minute) 探测尾部缺口,重启补录同样从 MAX+1 开始——中间缺口永久丢失,
     /// 24h/7d 趋势图缺柱。
     ///
-    /// 本方法从 MAX(minute)+1min 追到"上一个完整分钟"(与 AggregateLastMinute 的
-    /// [now-1min, now) 语义一致),复用幂等的 AggregateMinuteRange(DELETE+INSERT 同事务)。
-    /// 单次最多补 maxMinutesPerTick 分钟,剩余留给下个 tick,避免单次长阻塞。
+    /// 实机缺陷修复(2026-09-03):起点取 MAX(minute)+1min 起的首个"有数据分钟"
+    /// (<see cref="FindNextDataMinute"/>),跳过服务停止期等无原始数据的空洞分钟——
+    /// 空分钟无法在 samples_minute 建行(主键含 process_name),MAX(minute) 不会推进,
+    /// 旧实现起点会被空洞永久堵死:死循环补同一批空分钟,运行期新数据永不聚合
+    /// (现象:服务启动 40 分钟后 samples_minute 无新行,日志每分钟重复相同范围补录)。
+    /// 聚合区间内嵌套的空洞由下个 tick 起点重算跳过,自愈且无数据丢失。
     /// </summary>
     /// <returns>本次补录的分钟数(0 表示无缺口或 samples_minute 尚无数据)</returns>
     public int AggregateCatchUp(int maxMinutesPerTick = 10)
     {
-        DateTime latestAggregated;
+        // 1. 已聚合尾部边界
+        string? maxMinuteText;
         using (var conn = _repository.OpenConnection())
         {
             using var aggCmd = conn.CreateCommand();
@@ -114,18 +118,27 @@ public class AggregationService
                 // samples_minute 为空(新库):首建由启动 BackfillMissingMinutes 负责
                 return 0;
             }
-            latestAggregated = DateTime.Parse((string)aggResult);
+            maxMinuteText = (string)aggResult;
         }
+        var latestAggregated = DateTime.Parse(maxMinuteText);
 
-        // 待补范围:[latestAggregated+1min, Floor(now))
-        var since = new DateTime(
-            latestAggregated.Year, latestAggregated.Month, latestAggregated.Day,
-            latestAggregated.Hour, latestAggregated.Minute, 0).AddMinutes(1);
+        // 2. 起点:MAX(minute)+1min 起的首个"有数据分钟"(跳过服务停止期空洞)
+        string? nextMinute;
+        using (var conn = _repository.OpenConnection())
+        {
+            nextMinute = FindNextDataMinute(
+                conn, SampleRepository.FormatMinute(latestAggregated.AddMinutes(1)));
+        }
+        if (nextMinute is null) return 0; // 无待聚合的新原始数据
+
+        // 3. 终点:上一完整分钟(与 AggregateLastMinute 的 [now-1min, now) 语义一致)
+        var since = DateTime.Parse(nextMinute + ":00");
         var now = DateTime.Now;
         var endExclusive = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0);
 
         if (since >= endExclusive) return 0;
 
+        // 4. 单 tick 上限,复用幂等 AggregateMinuteRange(DELETE+INSERT 同事务)
         var totalMissing = (int)(endExclusive - since).TotalMinutes;
         var cappedEnd = totalMissing > maxMinutesPerTick
             ? since.AddMinutes(maxMinutesPerTick)
@@ -137,6 +150,34 @@ public class AggregationService
             filled, totalMissing,
             since.ToString("yyyy-MM-ddTHH:mm"), cappedEnd.ToString("yyyy-MM-ddTHH:mm"));
         return filled;
+    }
+
+    /// <summary>
+    /// 查找 samples 中 timestamp &gt;= @from 的首个有数据分钟(P1-3 实机缺陷修复,2026-09-03)。
+    ///
+    /// 返回分钟级文本 "yyyy-MM-ddTHH:mm"(substr(timestamp,1,16));无数据返回 null。
+    /// 走 samples 主键 (timestamp, ...) 前缀范围 + LIMIT 1 → 索引 seek,微秒级。
+    ///
+    /// 背景:samples_minute 无法为"无原始数据的分钟"建立聚合行(PRIMARY KEY 含
+    /// process_name),而 MAX(minute) 只统计已存在的行——服务停止期(迁移/升级窗口)
+    /// 的空洞分钟会永久挡住 MAX(minute)+1 式起点,导致死循环补空分钟且运行期
+    /// 新数据永不聚合。用本方法跳过空洞,从下一个有数据分钟开始聚合。
+    /// 聚合区间内若仍嵌套空洞:空分钟 INSERT 0 行无害,MAX(minute) 停在空洞前,
+    /// 下个 tick 起点重算再次跳过——自愈,无数据丢失。
+    /// </summary>
+    private string? FindNextDataMinute(SqliteConnection conn, string fromText)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT substr(timestamp, 1, 16)
+            FROM samples
+            WHERE timestamp >= @from
+            ORDER BY timestamp
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("@from", fromText);
+        var result = cmd.ExecuteScalar();
+        return result is null || result == DBNull.Value ? null : (string)result;
     }
 
     /// <summary>
@@ -192,9 +233,22 @@ public class AggregationService
             }
         }
 
-        // 计算 gap
-        var backfillStart = latestAggregated.AddMinutes(1);
+        // 计算 gap:起点跳过空洞(P1-3 实机缺陷修复,2026-09-03,与 AggregateCatchUp 同款语义)
+        // 服务停止期(迁移/升级窗口)的分钟在 samples 无数据,无法在 samples_minute 建行,
+        // MAX(minute)+1 式起点会被空洞永久堵死;改为从首个"有数据分钟"起补录。
         var backfillEnd = latestRaw;
+        string? firstDataMinute;
+        using (var conn = _repository.OpenConnection())
+        {
+            firstDataMinute = FindNextDataMinute(
+                conn, SampleRepository.FormatMinute(latestAggregated.AddMinutes(1)));
+        }
+        if (firstDataMinute is null)
+        {
+            _logger.LogDebug("Backfill: no sample data beyond MAX(minute), skipping");
+            return;
+        }
+        var backfillStart = DateTime.Parse(firstDataMinute + ":00");
 
         // 限制补录范围最多 1 天（与 samples 保留期一致，RawDataDays=1）
         var maxBackfillStart = backfillEnd.AddDays(-1);
