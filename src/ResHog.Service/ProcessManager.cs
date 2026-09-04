@@ -10,7 +10,7 @@ namespace ResHog.Services;
 /// Performance strategy:
 /// - Port-map (netstat -ano): cached for 5 seconds (stable data).
 /// - Process-list (GetProcesses + attributes): first call sync-full, then
-///   async background refresh in batches of 50 — never block a repeated call.
+///   async background refresh — never block a repeated call.
 /// </summary>
 public class ProcessManager
 {
@@ -27,8 +27,6 @@ public class ProcessManager
     private readonly object _processListLock = new();
     private int _refreshBusy;           // 0=free, 1=busy
 
-    private const int BatchSize = 50;  // processes per batch for progressive cache update
-
     /// <summary>
     /// Search running processes by name or port number.
     /// </summary>
@@ -44,6 +42,19 @@ public class ProcessManager
         // Returns cached list immediately (never blocks). If stale, triggers
         // async batch refresh. First-ever call does sync full enumeration.
         var allProcesses = GetCachedProcessList();
+
+        // FIX-2(2026-09-04):缓存为空(服务刚启动,后台刷新尚未完成)时同步完整枚举
+        // 一次并回填缓存,避免首屏/刚重启时搜索返回空("结果时有时无"的另一来源)。
+        if (allProcesses.Count == 0)
+        {
+            allProcesses = EnumerateProcesses();
+            lock (_processListLock)
+            {
+                _cachedProcessList = allProcesses;
+                _processListCachedAt = DateTime.Now;
+            }
+        }
+
         var portMap = GetCachedPortMap();
 
         var results = new List<ProcessInfoDto>(allProcesses.Count);
@@ -114,11 +125,16 @@ public class ProcessManager
     }
 
     /// <summary>
-    /// Background task: enumerates processes in batches of <see cref="BatchSize"/>,
-    /// updating the shared cache after every completed batch so concurrent callers
-    /// get progressively fresher data instead of waiting for the full 400-process scan.
+    /// Background task: enumerates all processes, then swaps the COMPLETE list into
+    /// the shared cache once (FIX-1, 2026-09-04)。
+    ///
+    /// 历史缺陷:原实现在每处理完 50 个进程时就把"半成品列表"整体换进缓存,
+    /// 而搜索始终读缓存——正处于未处理 PID 区间的进程(如 ResHog.Service 自身)
+    /// 会从结果中消失,表现为"点搜索有结果、过一阵又消失"(实机探测 60 次中
+    /// 46 次空结果)。现改为仅在完整列表生成后一次性交换;刷新期间搜索继续
+    /// 使用旧的完整列表,保证结果一致、不为空。
     /// </summary>
-    private async Task RefreshProcessListBatchedAsync()
+    private Task RefreshProcessListBatchedAsync()
     {
         try
         {
@@ -128,7 +144,6 @@ public class ProcessManager
                 .ToArray();
 
             var partial = new List<ProcessInfoDto>(allPids.Length);
-            int processed = 0;
 
             foreach (var pid in allPids)
             {
@@ -149,23 +164,10 @@ public class ProcessManager
                 {
                     // Process exited between snapshot and access — skip.
                 }
-
-                processed++;
-
-                // After every batch, swap the cache so progressive data is visible.
-                if (processed % BatchSize == 0)
-                {
-                    lock (_processListLock)
-                    {
-                        _cachedProcessList = new List<ProcessInfoDto>(partial);
-                        _processListCachedAt = DateTime.Now;
-                    }
-                    // Yield so other threads (API callers) can acquire the lock.
-                    await Task.Yield();
-                }
             }
 
-            // Final swap with complete list.
+            // FIX-1(2026-09-04):仅在完整列表生成后一次性交换缓存。
+            // (原实现在每 50 个进程时交换"半成品列表",导致搜索结果时有时无。)
             lock (_processListLock)
             {
                 _cachedProcessList = partial;
@@ -176,6 +178,7 @@ public class ProcessManager
         {
             Interlocked.Exchange(ref _refreshBusy, 0);
         }
+        return Task.CompletedTask;
     }
 
     /// <summary>
