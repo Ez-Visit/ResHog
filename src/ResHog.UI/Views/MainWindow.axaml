@@ -63,7 +63,8 @@
                                FontWeight="SemiBold"
                                Foreground="#555"
                                VerticalAlignment="Center" />
-                    <TextBlock Text="ResHog v0.2.4"
+                    <!-- VER-1:版本号动态化(原硬编码 0.2.4),随 csproj Version 自动更新 -->
+                    <TextBlock Text="{Binding VersionText}"
                                FontSize="11"
                                Foreground="#999"
                                VerticalAlignment="Center" />

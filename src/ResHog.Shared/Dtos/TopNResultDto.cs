@@ -11,5 +11,7 @@ public record TopNResultDto(
     double MaxValue,
     double SecondaryMetric,
     string Unit,
-    string MetricName
+    string MetricName,
+    // 任务管理器同款友好名;null=旧服务未提供(Top-N 富化 DISP-9)
+    string? DisplayName = null
 );

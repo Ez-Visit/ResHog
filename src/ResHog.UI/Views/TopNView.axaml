@@ -57,13 +57,22 @@
                   BorderBrush="#E0E0E0"
                   Margin="16,0">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="#"
-                                    Binding="{Binding Rank}"
-                                    Width="45" />
-                <DataGridTemplateColumn Header="进程名" Width="200" SortMemberPath="ProcessName">
+                <DataGridTemplateColumn Header="#" Width="45" SortMemberPath="Rank">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:TopNResultDto">
-                            <TextBlock Text="{Binding ProcessName}"
+                            <TextBlock Text="{Binding Rank}"
+                                       ToolTip.Tip="{Binding Rank}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <!-- UIW-3 + 用户追加:进程名 200→400(右侧空余充足) -->
+                <DataGridTemplateColumn Header="进程名" Width="400" SortMemberPath="ProcessName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <!-- DISP-9:友好名显示;ToolTip 保留 exe 名 -->
+                            <TextBlock Text="{Binding DisplayName}"
                                        ToolTip.Tip="{Binding ProcessName}"
                                        TextTrimming="CharacterEllipsis" />
                         </DataTemplate>
@@ -78,18 +87,48 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTextColumn Header="平均值"
-                                    Binding="{Binding AvgValue, StringFormat=F2}"
-                                    Width="100" />
-                <DataGridTextColumn Header="峰值"
-                                    Binding="{Binding MaxValue, StringFormat=F2}"
-                                    Width="100" />
-                <DataGridTextColumn Header="单位"
-                                    Binding="{Binding Unit}"
-                                    Width="70" />
-                <DataGridTextColumn Header="指标"
-                                    Binding="{Binding MetricName, Converter={x:Static cvt:MetricNameConverter.Instance}}"
-                                    Width="100" />
+                <DataGridTemplateColumn Header="平均值" Width="100" SortMemberPath="AvgValue">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <TextBlock Text="{Binding AvgValue, StringFormat=F2}"
+                                       ToolTip.Tip="{Binding AvgValue, StringFormat=F2}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="峰值" Width="100" SortMemberPath="MaxValue">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <TextBlock Text="{Binding MaxValue, StringFormat=F2}"
+                                       ToolTip.Tip="{Binding MaxValue, StringFormat=F2}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="单位" Width="70" SortMemberPath="Unit">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <TextBlock Text="{Binding Unit}"
+                                       ToolTip.Tip="{Binding Unit}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="指标" Width="100" SortMemberPath="MetricName">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:TopNResultDto">
+                            <!-- UIW-3 顺带修复存量 bug:原 TextColumn 绑定不存在的 "Metric"
+                                 (反射绑定静默失败,该列一直显示为空);正确属性为 MetricName -->
+                            <TextBlock Text="{Binding MetricName, Converter={x:Static cvt:MetricNameConverter.Instance}}"
+                                       ToolTip.Tip="{Binding MetricName, Converter={x:Static cvt:MetricNameConverter.Instance}}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
             </DataGrid.Columns>
         </DataGrid>
 
@@ -113,12 +152,13 @@
                 <ItemsControl ItemsSource="{Binding Results}" MaxHeight="200">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="dto:TopNResultDto">
-                            <Grid ColumnDefinitions="160,*,80" Margin="0,2" Height="20">
+                            <Grid ColumnDefinitions="320,*,80" Margin="0,2" Height="20">
                                 <TextBlock Grid.Column="0"
-                                           Text="{Binding ProcessName}"
+                                           Text="{Binding DisplayName}"
                                            FontSize="11"
                                            VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis" />
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding ProcessName}" />
                                 <ctl:UsageBar Grid.Column="1"
                                               Value="{Binding AvgValue}"
                                               MaxValue="{Binding MaxValue}"

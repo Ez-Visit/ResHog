@@ -27,6 +27,12 @@ public class ProcessDisplayNameService
     private readonly ConcurrentDictionary<string, string?> _pathCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ServiceMapper _serviceMapper;
 
+    // 进程名 → 显示名归集缓存(DISP-9,2026-09-04):
+    // 由 ProcessManager 后台枚举完成后填充,供聚合表数据(仅 exe 名、无 PID/路径,
+    // 如 Top-N)按进程名富化。同名多实例显示名一致则存该值;冲突(svchost 各实例
+    // "服务主机: X"不同)存 null,由上层 ResolveByExeName/exe 名兜底。
+    private readonly ConcurrentDictionary<string, string?> _byName = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>任务管理器同款"服务主机"前缀(ResHog UI 为中文,写死;本地化属未来项)。</summary>
     public const string ServiceHostPrefix = "服务主机: ";
 
@@ -72,6 +78,30 @@ public class ProcessDisplayNameService
         return processName.Equals("svchost", StringComparison.OrdinalIgnoreCase)
             ? "服务主机(系统服务)"
             : null;
+    }
+
+    /// <summary>
+    /// 进程名级归集(DISP-9):由 ProcessManager 后台枚举完成后调用(不在请求路径)。
+    /// 对每个唯一进程名,若其所有实例的显示名一致则缓存该值,否则标记冲突(null)。
+    /// 进程退出后映射保留(进程名可能被复用,值仍正确);服务重启后首轮枚举完成前
+    /// 无映射,上层兜底 exe 名。
+    /// </summary>
+    public void IndexRunningProcesses(IReadOnlyList<ResHog.Shared.Dtos.ProcessInfoDto> processes)
+    {
+        foreach (var group in processes.GroupBy(p => p.ProcessName, StringComparer.OrdinalIgnoreCase))
+        {
+            var distinct = group
+                .Select(p => p.DisplayName ?? p.ProcessName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _byName[group.Key] = distinct.Count == 1 ? distinct[0] : null;
+        }
+    }
+
+    /// <summary>按进程名查显示名;null=无映射或冲突(上层按场景兜底,如 svchost 走 ResolveByExeName)。</summary>
+    public string? ResolveByName(string processName)
+    {
+        return _byName.TryGetValue(processName, out var d) ? d : null;
     }
 
     private string? ReadFileDescription(string path)

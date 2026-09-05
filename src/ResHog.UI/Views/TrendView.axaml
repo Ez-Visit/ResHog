@@ -67,7 +67,9 @@
         <!-- Statistics summary -->
         <Border Grid.Row="2" Background="#FAFAFA" Padding="16,8"
                 BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
-            <Grid ColumnDefinitions="*,*,*,*">
+            <!-- UIW-6(用户追加):详细信息列 1/4→2/5——FirstSeen/LastSeen 时间戳含 7 位
+                 小数秒,原 1/4 宽显示不全 -->
+            <Grid ColumnDefinitions="*,*,1.2*,2*">
                 <StackPanel Grid.Column="0" Spacing="2">
                     <TextBlock Text="平均值" FontSize="11" Foreground="#888" />
                     <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Bottom">

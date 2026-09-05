@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -15,6 +16,23 @@ public partial class MainViewModel : ObservableObject
     private readonly AlertViewModel _alerts;
     private CancellationTokenSource? _healthCts;
     private DateTime? _lastUpdateWithRender;
+
+    /// <summary>
+    /// 右下角版本号:从程序集 InformationalVersion 派生("0.2.7+hash" → "v0.2.7"),
+    /// csproj Version 变更后自动跟随,不再硬编码(VER-1,2026-09-04)。
+    /// </summary>
+    public string VersionText { get; } = "ResHog v" + GetVersion();
+
+    private static string GetVersion()
+    {
+        var info = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "";
+        // 截断 SourceLink/hash 后缀: "0.2.7+89ae00b..." → "0.2.7"
+        var plus = info.IndexOf('+');
+        var v = plus > 0 ? info[..plus] : info;
+        return string.IsNullOrEmpty(v) ? "0.0.0" : v;
+    }
 
     [ObservableProperty]
     private bool _isServiceOnline;

@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using ResHog.Services;
 using ResHog.Shared.Dtos;
 using ResHog.Storage;
 
@@ -12,11 +13,16 @@ public class TopNAnalyzer
 {
     private readonly SampleRepository _repo;
     private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContext;
+    private readonly ProcessDisplayNameService _displayName;
 
-    public TopNAnalyzer(SampleRepository repo, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext)
+    public TopNAnalyzer(
+        SampleRepository repo,
+        Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext,
+        ProcessDisplayNameService displayName)
     {
         _repo = repo;
         _httpContext = httpContext;
+        _displayName = displayName;
     }
 
     private void RecordDbTime(long ms)
@@ -79,14 +85,21 @@ public class TopNAnalyzer
         var rank = 1;
         while (reader.Read())
         {
+            var processName = reader.GetString(0);
+            // DISP-9:Top-N 富化——聚合行只有 exe 名,按进程名归集映射查显示名;
+            // 冲突名(svchost)走通用标签;无映射(已退出且本次运行期未活跃)兜底 exe 名。
+            var display = _displayName.ResolveByName(processName)
+                ?? _displayName.ResolveByExeName(processName)
+                ?? processName;
             results.Add(new TopNResultDto(
                 rank++,
-                reader.GetString(0),
+                processName,
                 reader.IsDBNull(1) ? null : reader.GetString(1),
                 Math.Round(reader.GetDouble(2), 2),
                 Math.Round(reader.GetDouble(3), 2),
                 Math.Round(reader.GetDouble(4), 2),
-                unit, name
+                unit, name,
+                display
             ));
         }
         dbSw.Stop();

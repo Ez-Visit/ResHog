@@ -84,7 +84,9 @@
                   BorderBrush="#E0E0E0"
                   Margin="16,8">
             <DataGrid.Columns>
-                <DataGridTemplateColumn Header="时间" Width="180" SortMemberPath="Timestamp">
+                <!-- UIW-8(用户澄清追加):时间列 180→220——Timestamp 含 7 位小数秒
+                     (26 字符),原宽显示不完整 -->
+                <DataGridTemplateColumn Header="时间" Width="220" SortMemberPath="Timestamp">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:AlertDto">
                             <TextBlock Text="{Binding Timestamp}"
@@ -102,9 +104,16 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTextColumn Header="PID"
-                                    Binding="{Binding Pid}"
-                                    Width="70" />
+                <DataGridTemplateColumn Header="PID" Width="70" SortMemberPath="Pid">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding Pid}"
+                                       ToolTip.Tip="{Binding Pid}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTemplateColumn Header="服务名" Width="140" SortMemberPath="ServiceName">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:AlertDto">
@@ -114,18 +123,46 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTextColumn Header="指标"
-                                    Binding="{Binding Metric, Converter={x:Static cvt:MetricNameConverter.Instance}}"
-                                    Width="100" />
-                <DataGridTextColumn Header="当前值"
-                                    Binding="{Binding Value, StringFormat=F1}"
-                                    Width="90" />
-                <DataGridTextColumn Header="阈值"
-                                    Binding="{Binding Threshold, StringFormat=F1}"
-                                    Width="90" />
-                <DataGridTextColumn Header="级别"
-                                    Binding="{Binding Severity, Converter={x:Static cvt:SeverityNameConverter.Instance}}"
-                                    Width="80" />
+                <DataGridTemplateColumn Header="指标" Width="100" SortMemberPath="Metric">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding Metric, Converter={x:Static cvt:MetricNameConverter.Instance}}"
+                                       ToolTip.Tip="{Binding Metric, Converter={x:Static cvt:MetricNameConverter.Instance}}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="当前值" Width="90" SortMemberPath="Value">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding Value, StringFormat=F1}"
+                                       ToolTip.Tip="{Binding Value, StringFormat=F1}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="阈值" Width="90" SortMemberPath="Threshold">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding Threshold, StringFormat=F1}"
+                                       ToolTip.Tip="{Binding Threshold, StringFormat=F1}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="级别" Width="80" SortMemberPath="Severity">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:AlertDto">
+                            <TextBlock Text="{Binding Severity, Converter={x:Static cvt:SeverityNameConverter.Instance}}"
+                                       ToolTip.Tip="{Binding Severity, Converter={x:Static cvt:SeverityNameConverter.Instance}}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
             </DataGrid.Columns>
         </DataGrid>
 

@@ -55,8 +55,18 @@
                   BorderBrush="#E0E0E0"
                   Margin="16,8">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="70" />
-                <DataGridTemplateColumn Header="进程名" Width="240" SortMemberPath="ProcessName">
+                <DataGridTemplateColumn Header="PID" Width="70" SortMemberPath="Pid">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <!-- UIW-2:全列悬停完整内容 -->
+                            <TextBlock Text="{Binding Pid}"
+                                       ToolTip.Tip="{Binding Pid}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="进程名" Width="220" SortMemberPath="ProcessName">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:ProcessInfoDto">
                             <!-- DISP-6:友好名(任务管理器同款);ToolTip 保留 exe 名对冲 FileDescription 伪造 -->
@@ -66,7 +76,9 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTemplateColumn Header="命令行" Width="280" SortMemberPath="CommandLine">
+                <!-- UIW-1:命令行改星号自适应——DataGrid 恒等于视口宽,操作列永远完整可见;
+                     窄窗口下命令行截断由 ToolTip 兜底 -->
+                <DataGridTemplateColumn Header="命令行" Width="*" MinWidth="200" SortMemberPath="CommandLine">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:ProcessInfoDto">
                             <TextBlock Text="{Binding CommandLine}"
@@ -75,19 +87,48 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTextColumn Header="线程数"
-                                    Binding="{Binding ThreadCount}"
-                                    Width="80" />
-                <DataGridTextColumn Header="内存 (MB)"
-                                    Binding="{Binding WorkingSetMb, StringFormat='{}{0:F0}'}"
-                                    Width="90" />
-                <DataGridTextColumn Header="CPU (%)"
-                                    Binding="{Binding CpuPercent, StringFormat='{}{0:F1}'}"
-                                    Width="70" />
-                <DataGridTextColumn Header="端口"
-                                    Binding="{Binding Ports}"
-                                    Width="160" />
-                <DataGridTemplateColumn Header="操作" Width="90">
+                <DataGridTemplateColumn Header="线程数" Width="70" SortMemberPath="ThreadCount">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <TextBlock Text="{Binding ThreadCount}"
+                                       ToolTip.Tip="{Binding ThreadCount}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="内存 (MB)" Width="80" SortMemberPath="WorkingSetMb">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <TextBlock Text="{Binding WorkingSetMb, StringFormat='{}{0:F0}'}"
+                                       ToolTip.Tip="{Binding WorkingSetMb, StringFormat='{}{0:F1} MB'}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="CPU (%)" Width="65" SortMemberPath="CpuPercent">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <TextBlock Text="{Binding CpuPercent, StringFormat='{}{0:F1}'}"
+                                       ToolTip.Tip="{Binding CpuPercent, StringFormat='{}{0:F1}%'}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="端口" Width="120" SortMemberPath="Ports">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:ProcessInfoDto">
+                            <!-- 端口列表内容最长,ToolTip 必备 -->
+                            <TextBlock Text="{Binding Ports}"
+                                       ToolTip.Tip="{Binding Ports}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="操作" Width="70">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:ProcessInfoDto">
                             <StackPanel HorizontalAlignment="Center">

@@ -62,8 +62,11 @@ public partial class TopNViewModel : ViewModelBase
             Results.Clear();
             if (data != null)
             {
+                // DISP-9:旧服务未提供 DisplayName 时以 exe 名兜底(版本错配窗口保护)
                 foreach (var item in data)
-                    Results.Add(item);
+                    Results.Add(item.DisplayName is null
+                        ? item with { DisplayName = item.ProcessName }
+                        : item);
             }
             sw.Stop();
 
