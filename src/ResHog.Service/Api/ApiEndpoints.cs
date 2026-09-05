@@ -1,3 +1,4 @@
+using System.Reflection;
 using ResHog.Analysis;
 using ResHog.Services;
 using ResHog.Shared.Dtos;
@@ -21,6 +22,22 @@ public static class ApiEndpoints
     /// Service start time, captured when the process launches. Used by /api/health.
     /// </summary>
     public static readonly DateTime StartTime = DateTime.Now;
+
+    /// <summary>
+    /// 服务版本号(REF-4,2026-09-05):从程序集 InformationalVersion 派生("0.2.7+hash"→"0.2.7"),
+    /// 随 csproj Version 自动更新。(历史缺陷:此处曾硬编码 "0.2.4",版本升级后 health 仍报旧版,
+    /// 曾误导排障——被误判为"服务未升级"。)
+    /// </summary>
+    private static readonly string ServiceVersion = GetServiceVersion();
+
+    private static string GetServiceVersion()
+    {
+        var info = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "";
+        var plus = info.IndexOf('+');
+        return plus > 0 ? info[..plus] : (string.IsNullOrEmpty(info) ? "0.0.0" : info);
+    }
 
     /// <summary>
     /// Maps all ResHog API endpoints to the application's endpoint routing.
@@ -49,7 +66,7 @@ public static class ApiEndpoints
                     (long)uptime.TotalSeconds,
                     stats.SampleCount,
                     stats.MonitoredProcesses,
-                    "0.2.4"
+                    ServiceVersion
                 ));
             }
             catch (Exception ex)

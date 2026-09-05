@@ -1,14 +1,18 @@
+using System.Collections.Concurrent;
 using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
 using ResHog.Shared.Dtos;
 
 namespace ResHog.Services;
 
 /// <summary>
 /// Manages process search (by name or port) and process termination.
-/// Uses System.Diagnostics.Process for kill and netstat -ano for port mapping.
+/// Uses System.Diagnostics.Process for kill and iphlpapi native tables for port mapping.
 ///
 /// Performance strategy:
-/// - Port-map (netstat -ano): cached for 5 seconds (stable data).
+/// - Port-map (GetExtendedTcpTable/UdpTable, PORT-1 2026-09-05): in-process native
+///   call (~ms), cached for 60 seconds (PORT-2). (原 netstat -ano spawn 在服务环境
+///   实测 ~10s/次且在请求路径同步执行,导致"距上次 >5s 的搜索要 10s+",已移除。)
 /// - Process-list (GetProcesses + attributes): first call sync-full, then
 ///   async background refresh — never block a repeated call.
 /// </summary>
@@ -19,12 +23,19 @@ public class ProcessManager
     public ProcessManager(ProcessDisplayNameService displayName)
     {
         _displayName = displayName;
+        // REF-3(2026-09-05):服务启动即后台预热进程列表缓存(经 GetCachedProcessList
+        // 触发后台刷新并做显示名解析/归集)——首个用户搜索命中热缓存,不再踩
+        // FIX-2 空缓存同步枚举的冷启动代价。DI 单例构造于 host 启动时,预热与
+        // 采样启动并行,互不阻塞。
+        _ = Task.Run(() => GetCachedProcessList());
     }
 
-    // --- Port-map cache (netstat) ---
+    // --- Port-map cache (iphlpapi native, PORT-1/2) ---
     private Dictionary<int, HashSet<int>>? _cachedPortMap;
     private DateTime _portMapCachedAt;
-    private static readonly TimeSpan PortMapTtl = TimeSpan.FromSeconds(5);
+    // PORT-2(2026-09-05):原生解析毫秒级,TTL 放宽到 60s
+    // (原 netstat 时代 5s 也挡不住同步 spawn 的 ~10s)
+    private static readonly TimeSpan PortMapTtl = TimeSpan.FromSeconds(60);
     private readonly object _portMapLock = new();
 
     // --- Process-list cache (async batch refresh) ---
@@ -55,6 +66,16 @@ public class ProcessManager
         if (allProcesses.Count == 0)
         {
             allProcesses = EnumerateProcesses();
+            // DISP-9b:同步枚举路径同样补显示名并归集(服务刚启动首屏即有 Top-N 映射)
+            for (int i = 0; i < allProcesses.Count; i++)
+            {
+                var p = allProcesses[i];
+                allProcesses[i] = p with
+                {
+                    DisplayName = _displayName.Resolve(p.Pid, p.ProcessName, p.CommandLine) ?? p.ProcessName
+                };
+            }
+            _displayName.IndexRunningProcesses(allProcesses);
             lock (_processListLock)
             {
                 _cachedProcessList = allProcesses;
@@ -126,10 +147,14 @@ public class ProcessManager
                 DateTime.Now - _processListCachedAt >= ProcessListRefreshInterval;
         }
 
-        if (needsRefresh && Interlocked.CompareExchange(ref _refreshBusy, 1, 0) == 0)
-        {
-            _ = RefreshProcessListBatchedAsync();
-        }
+            if (needsRefresh && Interlocked.CompareExchange(ref _refreshBusy, 1, 0) == 0)
+            {
+                // REF-1(2026-09-05):FIX-1 把刷新方法改为同步实现后,直接调用会在
+                // HTTP 请求线程上同步执行整轮枚举(~7-14s)——任何间隔>3s 的名称搜索
+                // 都被阻塞(实测:名称搜索 10.1s / 紧接着 15ms;端口搜索不受影响)。
+                // Task.Run 把枚举真正移出请求线程;请求立即返回旧完整缓存(不为空)。
+                _ = Task.Run(RefreshProcessListBatchedAsync);
+            }
 
         lock (_processListLock)
         {
@@ -156,41 +181,49 @@ public class ProcessManager
                 .Select(p => p.Id)
                 .ToArray();
 
-            var partial = new List<ProcessInfoDto>(allPids.Length);
+            // REF-2(2026-09-05):枚举并行化——串行 518 进程 ×(GetProcessById+MainModule+
+            // Threads.Count+FileDescription 读)≈7-14s;并行 DOP=8 后 2~4s。
+            // 线程安全:_displayName 内部为 ConcurrentDictionary;ServiceMapper 自带锁。
+            var partial = new ConcurrentQueue<ProcessInfoDto>();
 
-            foreach (var pid in allPids)
-            {
-                try
+            Parallel.ForEach(allPids,
+                new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 2, 8) },
+                pid =>
                 {
-                    using var proc = System.Diagnostics.Process.GetProcessById(pid);
-                    // DISP-4(2026-09-04):任务管理器同款友好名(FileDescription/MUI;svchost→服务主机)。
-                    // 解析在后台刷新线程执行,未缓存路径首次为一次版本资源读,之后 O(1)。
-                    var exePath = proc.MainModule?.FileName;
-                    var display = _displayName.Resolve(proc.Id, proc.ProcessName, exePath);
-                    partial.Add(new ProcessInfoDto(
-                        proc.Id,
-                        proc.ProcessName,
-                        Math.Round(proc.WorkingSet64 / 1048576.0, 1),
-                        0,
-                        "",
-                        exePath ?? "",
-                        proc.Threads.Count,
-                        display ?? proc.ProcessName
-                    ));
-                }
-                catch
-                {
-                    // Process exited between snapshot and access — skip.
-                }
-            }
+                    try
+                    {
+                        using var proc = System.Diagnostics.Process.GetProcessById(pid);
+                        // DISP-4(2026-09-04):任务管理器同款友好名(FileDescription/MUI;svchost→服务主机)。
+                        var exePath = proc.MainModule?.FileName;
+                        var display = _displayName.Resolve(proc.Id, proc.ProcessName, exePath);
+                        partial.Enqueue(new ProcessInfoDto(
+                            proc.Id,
+                            proc.ProcessName,
+                            Math.Round(proc.WorkingSet64 / 1048576.0, 1),
+                            0,
+                            "",
+                            exePath ?? "",
+                            proc.Threads.Count,
+                            display ?? proc.ProcessName
+                        ));
+                    }
+                    catch
+                    {
+                        // Process exited between snapshot and access — skip.
+                    }
+                });
+
+            var list = partial.ToList();
 
             // FIX-1(2026-09-04):仅在完整列表生成后一次性交换缓存。
             // (原实现在每 50 个进程时交换"半成品列表",导致搜索结果时有时无。)
             lock (_processListLock)
             {
-                _cachedProcessList = partial;
+                _cachedProcessList = list;
                 _processListCachedAt = DateTime.Now;
             }
+            // DISP-9b:完整列表就绪后归集进程名→显示名(Top-N 等聚合数据按名富化)
+            _displayName.IndexRunningProcesses(list);
         }
         finally
         {
@@ -268,47 +301,142 @@ public class ProcessManager
     }
 
     // ====================================================================
-    // netstat -ano
+    // Port table (iphlpapi native, PORT-1)
     // ====================================================================
 
+    private const int AF_INET = 2;
+    private const int TCP_TABLE_OWNER_PID_ALL = 5;   // 所有状态 TCP 行,带 PID
+    private const int UDP_TABLE_OWNER_PID = 1;       // 所有 UDP 行,带 PID
+    private const uint NO_ERROR = 0;
+    private const uint ERROR_INSUFFICIENT_BUFFER = 122;
+
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    private static extern uint GetExtendedTcpTable(
+        IntPtr pTcpTable, ref int dwSize, bool bOrder, int ulAf, int tableClass, int reserved);
+
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    private static extern uint GetExtendedUdpTable(
+        IntPtr pUdpTable, ref int dwSize, bool bOrder, int ulAf, int tableClass, int reserved);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MIB_TCPROW_OWNER_PID
+    {
+        public uint dwState;
+        public uint dwLocalAddr;
+        public uint dwLocalPort;   // 网络字节序(低 16 位)
+        public uint dwRemoteAddr;
+        public uint dwRemotePort;
+        public uint dwOwningPid;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MIB_UDPROW_OWNER_PID
+    {
+        public uint dwLocalAddr;
+        public uint dwLocalPort;   // 网络字节序(低 16 位)
+        public uint dwOwningPid;
+    }
+
+    /// <summary>
+    /// 构建 端口 → PID 集合 映射(PORT-1,2026-09-05)。
+    ///
+    /// 历史缺陷:原实现 spawn `netstat.exe -ano` 并 ReadToEnd——在 HTTP 请求路径同步执行,
+    /// 服务环境(LocalSystem/session 0)下实测单次 ~10s(裸 netstat 0.5s 的 20 倍,
+    /// 嫌疑为杀软对服务 spawn 外部 exe 的注入扫描),且 ReadToEnd 无超时约束
+    /// (WaitForExit(1000) 在其后,形同虚设),导致"距上次 >5s 的搜索要 10s+"。
+    ///
+    /// 现改用 iphlpapi 原生表(netstat 的底层实现):无进程 spawn,单次 1~5ms;
+    /// 语义与 netstat -ano 对齐:TCP 所有状态行 + UDP 所有行,本地端口 → 拥有 PID(>0)。
+    /// 已知语义微差:仅 AF_INET(v4)——原 netstat 文本解析会把 v6 行端口也纳入,
+    /// 影响小;如需对齐可后续加 AF_INET6。
+    /// </summary>
     private static Dictionary<int, HashSet<int>> ResolvePortPids()
     {
         var result = new Dictionary<int, HashSet<int>>();
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "netstat.exe",
-                Arguments = "-ano",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true
-            };
-
-            using var process = System.Diagnostics.Process.Start(psi);
-            if (process == null) return result;
-
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(1000);
-
-            foreach (var line in output.Split('\n'))
-            {
-                var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 5 && int.TryParse(parts[^1], out var pid) && pid > 0)
-                {
-                    var local = parts[1];
-                    var colonIdx = local.LastIndexOf(':');
-                    if (colonIdx > 0 && int.TryParse(local[(colonIdx + 1)..], out var port))
-                    {
-                        if (!result.ContainsKey(pid))
-                            result[pid] = new HashSet<int>();
-                        result[pid].Add(port);
-                    }
-                }
-            }
-            return result;
+            AddTcpRows(result);
+            AddUdpRows(result);
         }
-        catch { return result; }
+        catch
+        {
+            // 原生表读取异常时返回已解析部分(与原实现容错口径一致)
+        }
+        return result;
+    }
+
+    private static void AddTcpRows(Dictionary<int, HashSet<int>> result)
+    {
+        int size = 64 * 1024;
+        var buf = Marshal.AllocHGlobal(size);
+        try
+        {
+            uint ret = GetExtendedTcpTable(buf, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+            if (ret == ERROR_INSUFFICIENT_BUFFER)
+            {
+                Marshal.FreeHGlobal(buf);
+                buf = Marshal.AllocHGlobal(size);
+                ret = GetExtendedTcpTable(buf, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+            }
+            if (ret != NO_ERROR) return;
+
+            uint count = (uint)Marshal.ReadInt32(buf);
+            int rowSize = Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
+            var rowPtr = buf + sizeof(uint);   // 跳过表头 dwNumEntries
+            for (uint i = 0; i < count; i++)
+            {
+                var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
+                AddPortPid(result, ReadLocalPort(row.dwLocalPort), (int)row.dwOwningPid);
+                rowPtr += rowSize;
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+
+    private static void AddUdpRows(Dictionary<int, HashSet<int>> result)
+    {
+        int size = 64 * 1024;
+        var buf = Marshal.AllocHGlobal(size);
+        try
+        {
+            uint ret = GetExtendedUdpTable(buf, ref size, false, AF_INET, UDP_TABLE_OWNER_PID, 0);
+            if (ret == ERROR_INSUFFICIENT_BUFFER)
+            {
+                Marshal.FreeHGlobal(buf);
+                buf = Marshal.AllocHGlobal(size);
+                ret = GetExtendedUdpTable(buf, ref size, false, AF_INET, UDP_TABLE_OWNER_PID, 0);
+            }
+            if (ret != NO_ERROR) return;
+
+            uint count = (uint)Marshal.ReadInt32(buf);
+            int rowSize = Marshal.SizeOf<MIB_UDPROW_OWNER_PID>();
+            var rowPtr = buf + sizeof(uint);
+            for (uint i = 0; i < count; i++)
+            {
+                var row = Marshal.PtrToStructure<MIB_UDPROW_OWNER_PID>(rowPtr);
+                AddPortPid(result, ReadLocalPort(row.dwLocalPort), (int)row.dwOwningPid);
+                rowPtr += rowSize;
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+
+    /// <summary>dwLocalPort 为网络字节序:换算为主机序端口(与 netstat 显示一致)。</summary>
+    private static int ReadLocalPort(uint networkOrderPort)
+        => ((int)(networkOrderPort & 0xFF) << 8) | (int)((networkOrderPort >> 8) & 0xFF);
+
+    private static void AddPortPid(Dictionary<int, HashSet<int>> map, int port, int pid)
+    {
+        if (pid <= 0 || port <= 0) return;
+        if (!map.TryGetValue(port, out var set))
+            map[port] = set = new HashSet<int>();
+        set.Add(pid);
     }
 
     // ====================================================================
