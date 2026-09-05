@@ -10,5 +10,7 @@ public record ProcessInfoDto(
     double CpuPercent,
     string Ports,
     string CommandLine,
-    int ThreadCount
+    int ThreadCount,
+    // 任务管理器同款友好名(FileDescription/MUI,svchost→服务主机);null=旧服务未提供(DISP-3)
+    string? DisplayName = null
 );

@@ -38,5 +38,7 @@ public record ProcessSummaryDto(
     double IoReadMbS,
     double IoWriteMbS,
     int ThreadCount,
-    int HandleCount
+    int HandleCount,
+    // 任务管理器同款友好名;null=旧服务未提供(DISP-3)。历史数据(TopN/趋势)不含此字段
+    string? DisplayName = null
 );

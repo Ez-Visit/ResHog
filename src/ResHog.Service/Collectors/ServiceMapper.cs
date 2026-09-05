@@ -11,6 +11,7 @@ namespace ResHog.Collectors;
 public class ServiceMapper
 {
     private Dictionary<int, string> _pidToService = new();
+    private Dictionary<int, string> _pidToServiceDisplay = new();   // DISP-1: pid → 本地化服务显示名(lpDisplayName)
     private DateTime _lastRefresh = DateTime.MinValue;
     private DateTime _lastSuccess = DateTime.MinValue;
     private readonly TimeSpan _refreshInterval = TimeSpan.FromMinutes(2);
@@ -34,6 +35,7 @@ public class ServiceMapper
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var newMap = new Dictionary<int, string>();
+            var newDisplayMap = new Dictionary<int, string>();
 
             try
             {
@@ -44,7 +46,7 @@ public class ServiceMapper
                 try
                 {
                     // Enumerate all services and query their PIDs
-                    EnumerateServices(scm, newMap);
+                    EnumerateServices(scm, newMap, newDisplayMap);
                 }
                 finally
                 {
@@ -53,6 +55,7 @@ public class ServiceMapper
 
                 sw.Stop();
                 _pidToService = newMap;
+                _pidToServiceDisplay = newDisplayMap;
                 _lastSuccess = DateTime.Now;
                 _logger.LogInformation(
                     "ServiceMap refresh: {ServiceCount} services in {Ms}ms",
@@ -74,7 +77,7 @@ public class ServiceMapper
         }
     }
 
-    private static void EnumerateServices(IntPtr scm, Dictionary<int, string> map)
+    private static void EnumerateServices(IntPtr scm, Dictionary<int, string> map, Dictionary<int, string> displayMap)
     {
         const int bufferSize = 64 * 1024;
         var buffer = Marshal.AllocHGlobal(bufferSize);
@@ -103,9 +106,15 @@ public class ServiceMapper
                     // svchost.exe hosts multiple services with the same PID;
                     // concatenate service names for multi-service PIDs.
                     if (map.TryGetValue(pid, out var existing))
+                    {
                         map[pid] = existing + "," + serviceName;
+                        displayMap[pid] = displayMap[pid] + "," + displayName;
+                    }
                     else
+                    {
                         map[pid] = serviceName;
+                        displayMap[pid] = string.IsNullOrEmpty(displayName) ? serviceName : displayName;
+                    }
                 }
                 ptr += Marshal.SizeOf<ENUM_SERVICE_STATUS_PROCESSW>();
             }
@@ -119,6 +128,16 @@ public class ServiceMapper
     public string? GetServiceName(int pid)
     {
         return _pidToService.TryGetValue(pid, out var name) ? name : null;
+    }
+
+    /// <summary>
+    /// Returns the localized service display name (lpDisplayName) for the given PID
+    /// (comma-joined when multiple services share the PID). Used by
+    /// ProcessDisplayNameService for the Task Manager-style "服务主机: X" label (DISP-1).
+    /// </summary>
+    public string? GetServiceDisplayName(int pid)
+    {
+        return _pidToServiceDisplay.TryGetValue(pid, out var name) ? name : null;
     }
 
     #region P/Invoke

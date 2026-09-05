@@ -16,7 +16,8 @@
                 <TextBox Text="{Binding SearchQuery}"
                          PlaceholderText="输入进程名或端口号..."
                          MinWidth="240"
-                         VerticalAlignment="Center" />
+                         VerticalAlignment="Center"
+                         KeyDown="OnSearchBoxKeyDown" />
 
                 <ComboBox SelectedItem="{Binding SelectedSearchMode}"
                           ItemsSource="{Binding SearchModes}"
@@ -58,7 +59,8 @@
                 <DataGridTemplateColumn Header="进程名" Width="240" SortMemberPath="ProcessName">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate x:DataType="dto:ProcessInfoDto">
-                            <TextBlock Text="{Binding ProcessName}"
+                            <!-- DISP-6:友好名(任务管理器同款);ToolTip 保留 exe 名对冲 FileDescription 伪造 -->
+                            <TextBlock Text="{Binding DisplayName}"
                                        ToolTip.Tip="{Binding ProcessName}"
                                        TextTrimming="CharacterEllipsis" />
                         </DataTemplate>

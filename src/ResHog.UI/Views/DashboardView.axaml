@@ -109,10 +109,11 @@
                             <DataTemplate x:DataType="dto:ProcessSummaryDto">
                                 <Grid ColumnDefinitions="160,*,80" Margin="0,3" Height="24">
                                     <TextBlock Grid.Column="0"
-                                               Text="{Binding ProcessName}"
+                                               Text="{Binding DisplayName}"
                                                FontSize="12"
                                                VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis" />
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding ProcessName}" />
                                     <ctl:UsageBar Grid.Column="1"
                                                   Value="{Binding CpuPercent}"
                                                   MaxValue="100"
@@ -143,10 +144,11 @@
                             <DataTemplate x:DataType="dto:ProcessSummaryDto">
                                 <Grid ColumnDefinitions="160,*,80" Margin="0,3" Height="24">
                                     <TextBlock Grid.Column="0"
-                                               Text="{Binding ProcessName}"
+                                               Text="{Binding DisplayName}"
                                                FontSize="12"
                                                VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis" />
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding ProcessName}" />
                                     <ctl:UsageBar Grid.Column="1"
                                                   Value="{Binding WorkingSetMb}"
                                                   MaxValue="2048"

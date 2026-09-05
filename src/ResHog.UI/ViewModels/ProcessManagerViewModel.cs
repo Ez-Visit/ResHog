@@ -157,9 +157,14 @@ public partial class ProcessManagerViewModel : ViewModelBase
             if (results != null)
             {
                 // Replace old results (avoid flicker from Clear+Add loop)
+                // DISP-6(2026-09-04):旧服务未提供 DisplayName 时以 exe 名兜底(版本错配窗口保护)
                 SearchResults.Clear();
                 foreach (var r in results)
-                    SearchResults.Add(r);
+                {
+                    SearchResults.Add(r.DisplayName is null
+                        ? r with { DisplayName = r.ProcessName }
+                        : r);
+                }
 
                 HasResultMessage = true;
                 KillMessage = string.IsNullOrWhiteSpace(SearchQuery)

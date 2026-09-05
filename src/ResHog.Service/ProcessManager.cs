@@ -14,6 +14,13 @@ namespace ResHog.Services;
 /// </summary>
 public class ProcessManager
 {
+    private readonly ProcessDisplayNameService _displayName;   // DISP-4: 任务管理器同款友好名
+
+    public ProcessManager(ProcessDisplayNameService displayName)
+    {
+        _displayName = displayName;
+    }
+
     // --- Port-map cache (netstat) ---
     private Dictionary<int, HashSet<int>>? _cachedPortMap;
     private DateTime _portMapCachedAt;
@@ -60,7 +67,13 @@ public class ProcessManager
         var results = new List<ProcessInfoDto>(allProcesses.Count);
         foreach (var proc in allProcesses)
         {
-            if (isAll || proc.ProcessName.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
+            // DISP-8(2026-09-04):匹配范围扩展为 进程名 / 命令行(exe 路径) / 友好显示名 任一命中
+            // - DisplayName 为 string?,?. 短路防 NRE
+            // - CommandLine 恒非 null(构造时 exePath ?? ""),空串 Contains 非空 query 为 false,天然安全
+            if (isAll ||
+                proc.ProcessName.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+                (proc.DisplayName?.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                proc.CommandLine.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
             {
                 if (portMap.TryGetValue(proc.Pid, out var portSet) && portSet.Count > 0)
                 {
@@ -150,14 +163,19 @@ public class ProcessManager
                 try
                 {
                     using var proc = System.Diagnostics.Process.GetProcessById(pid);
+                    // DISP-4(2026-09-04):任务管理器同款友好名(FileDescription/MUI;svchost→服务主机)。
+                    // 解析在后台刷新线程执行,未缓存路径首次为一次版本资源读,之后 O(1)。
+                    var exePath = proc.MainModule?.FileName;
+                    var display = _displayName.Resolve(proc.Id, proc.ProcessName, exePath);
                     partial.Add(new ProcessInfoDto(
                         proc.Id,
                         proc.ProcessName,
                         Math.Round(proc.WorkingSet64 / 1048576.0, 1),
                         0,
                         "",
-                        proc.MainModule?.FileName ?? "",
-                        proc.Threads.Count
+                        exePath ?? "",
+                        proc.Threads.Count,
+                        display ?? proc.ProcessName
                     ));
                 }
                 catch
@@ -224,6 +242,7 @@ public class ProcessManager
             try
             {
                 using var proc = System.Diagnostics.Process.GetProcessById(kv.Key);
+                var display = _displayName.Resolve(kv.Key, proc.ProcessName, proc.MainModule?.FileName);
                 results.Add(new ProcessInfoDto(
                     proc.Id,
                     proc.ProcessName,
@@ -231,7 +250,8 @@ public class ProcessManager
                     0,
                     string.Join(", ", kv.Value.Select(p => $"TCP/UDP:{p}")),
                     proc.MainModule?.FileName ?? "",
-                    proc.Threads.Count
+                    proc.Threads.Count,
+                    display ?? proc.ProcessName
                 ));
             }
             catch
@@ -239,7 +259,7 @@ public class ProcessManager
                 results.Add(new ProcessInfoDto(
                     kv.Key, "(已退出)", 0, 0,
                     string.Join(", ", kv.Value.Select(p => $":{p}")),
-                    "", 0
+                    "", 0, "(已退出)"
                 ));
             }
         }

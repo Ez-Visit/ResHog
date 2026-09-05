@@ -21,4 +21,14 @@ public partial class ProcessManagerView : UserControl
             }
         }
     }
+
+    /// <summary>搜索框回车 = 点击"搜索"按钮(复用 SearchCommand;Loading 中忽略防重入)。</summary>
+    private void OnSearchBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        if (DataContext is ViewModels.ProcessManagerViewModel vm && !vm.IsLoading)
+        {
+            vm.SearchCommand.Execute(null);
+        }
+    }
 }

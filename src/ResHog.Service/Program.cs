@@ -58,6 +58,7 @@ try
     // --- Collectors (singleton: stateful, single PDH query) ---
     builder.Services.AddSingleton<PdhCounterManager>();
     builder.Services.AddSingleton<ServiceMapper>();
+    builder.Services.AddSingleton<ProcessDisplayNameService>();
     builder.Services.AddSingleton<SampleCollector>();
 
     // --- Storage ---

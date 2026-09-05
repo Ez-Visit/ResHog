@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Caching.Memory;
+using ResHog.Services;
 using ResHog.Shared.Dtos;
 using ResHog.Storage;
 
@@ -33,12 +34,16 @@ public class DashboardService
     public DashboardService(
         SampleRepository repo,
         Microsoft.AspNetCore.Http.IHttpContextAccessor httpContext,
-        IMemoryCache cache)
+        IMemoryCache cache,
+        ProcessDisplayNameService displayName)
     {
         _repo = repo;
         _httpContext = httpContext;
         _cache = cache;
+        _displayName = displayName;
     }
+
+    private readonly ProcessDisplayNameService _displayName;
 
     /// <summary>
     /// Records elapsed SQL time (ms) into the current HttpContext.Items["db_time_ms"]
@@ -108,7 +113,13 @@ public class DashboardService
                     reader.GetInt32(8),
                     reader.GetInt32(9)
                 );
-                samples.Add(dto);
+                // DISP-5(2026-09-04):按 exe 名富化任务管理器同款友好名
+                // (只查表不读文件;svchost 多实例统一"服务主机(系统服务)")
+                var enriched = dto with
+                {
+                    DisplayName = _displayName.ResolveByExeName(dto.ProcessName) ?? dto.ProcessName
+                };
+                samples.Add(enriched);
                 totalCpu += dto.CpuPercent;
                 totalMem += dto.WorkingSetMb;
                 totalIoR += dto.IoReadMbS;
