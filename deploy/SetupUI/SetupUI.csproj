@@ -7,6 +7,8 @@
     <NoWarn>CS1591;CA1416;IL2026;IL2104</NoWarn>
     <AssemblyName>ResHog_Setup</AssemblyName>
     <RootNamespace>ResHog.SetupUI</RootNamespace>
+    <!-- 0.2.6(2026-09-04):与产品版本同步,使 setup.exe 文件版本可辨识 -->
+    <Version>0.2.6</Version>
 
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>

@@ -5,8 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>ResHog.UI</AssemblyName>
     <RootNamespace>ResHog.UI</RootNamespace>
-    <!-- 0.2.5(2026-09-04):与 ResHog.Service 版本保持一致;CI 发布时由 -p:Version 覆盖 -->
-    <Version>0.2.5</Version>
+    <!-- 0.2.6(2026-09-04):与 ResHog.Service 版本保持一致;CI 发布时由 -p:Version 覆盖 -->
+    <Version>0.2.6</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
 
