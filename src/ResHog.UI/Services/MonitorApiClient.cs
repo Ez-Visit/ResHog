@@ -157,6 +157,58 @@ public sealed class MonitorApiClient : IDisposable
             new KillProcessRequestDto(pid));
     }
 
+    // ---------------- 健康顾问(2026-09-06) ----------------
+
+    public async Task<List<FindingDto>?> GetFindingsAsync(string status = "active")
+    {
+        return await GetAsync<List<FindingDto>>($"/api/findings?status={status}");
+    }
+
+    /// <summary>“不再提醒”只做标记,服务端不执行任何进程/服务动作。</summary>
+    public async Task<bool> IgnoreFindingAsync(long id)
+    {
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            using var resp = await _httpClient.PostAsync($"/api/findings/{id}/ignore", content: null);
+            if (!resp.IsSuccessStatusCode) return false;
+            var json = await resp.Content.ReadAsStringAsync();
+            var typeInfo = MonitorJsonContext.Default.GetTypeInfo(typeof(IgnoreFindingResponseDto));
+            ParseTimingHeaders(resp, sw.ElapsedMilliseconds);
+            return typeInfo != null &&
+                   JsonSerializer.Deserialize(json, typeInfo) is IgnoreFindingResponseDto r && r.Success;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task<AdvisoryRulesDto?> GetRulesAsync()
+    {
+        return await GetAsync<AdvisoryRulesDto>("/api/rules");
+    }
+
+    public async Task<bool> SaveRulesAsync(AdvisoryRulesDto rules)
+    {
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            var typeInfo = MonitorJsonContext.Default.GetTypeInfo(typeof(AdvisoryRulesDto));
+            if (typeInfo == null) return false;
+            var json = JsonSerializer.Serialize(rules, typeInfo);
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await _httpClient.PutAsync("/api/rules", content);
+            if (!resp.IsSuccessStatusCode) return false;
+            ParseTimingHeaders(resp, sw.ElapsedMilliseconds);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private void ParseTimingHeaders(System.Net.Http.HttpResponseMessage resp, long networkMs)
     {
         var serverMs = 0L;

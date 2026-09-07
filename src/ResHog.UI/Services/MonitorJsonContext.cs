@@ -20,6 +20,10 @@ namespace ResHog.UI.Services;
 [JsonSerializable(typeof(List<ProcessInfoDto>))]
 [JsonSerializable(typeof(KillProcessRequestDto))]
 [JsonSerializable(typeof(KillProcessResponseDto))]
+[JsonSerializable(typeof(AdvisoryRulesDto))]
+[JsonSerializable(typeof(List<AdvisoryRule>))]
+[JsonSerializable(typeof(List<FindingDto>))]
+[JsonSerializable(typeof(IgnoreFindingResponseDto))]
 public partial class MonitorJsonContext : JsonSerializerContext
 {
 }

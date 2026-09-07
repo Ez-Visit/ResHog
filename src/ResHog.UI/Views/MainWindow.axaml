@@ -37,6 +37,10 @@
                 <views:AlertView DataContext="{Binding Alerts}" />
             </TabItem>
 
+            <TabItem Header="诊断建议">
+                <views:AdvisoryView DataContext="{Binding Advisory}" />
+            </TabItem>
+
         </TabControl>
 
         <!-- Status bar -->

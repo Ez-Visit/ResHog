@@ -14,6 +14,7 @@ public partial class MainViewModel : ObservableObject
     private readonly TopNViewModel _topN;
     private readonly TrendViewModel _trend;
     private readonly AlertViewModel _alerts;
+    private readonly AdvisoryViewModel _advisory;
     private CancellationTokenSource? _healthCts;
     private DateTime? _lastUpdateWithRender;
 
@@ -57,6 +58,7 @@ public partial class MainViewModel : ObservableObject
     public TopNViewModel TopN => _topN;
     public TrendViewModel Trend => _trend;
     public AlertViewModel Alerts => _alerts;
+    public AdvisoryViewModel Advisory => _advisory;
 
     public MainViewModel(
         MonitorApiClient apiClient,
@@ -64,7 +66,8 @@ public partial class MainViewModel : ObservableObject
         ProcessManagerViewModel processManager,
         TopNViewModel topN,
         TrendViewModel trend,
-        AlertViewModel alerts)
+        AlertViewModel alerts,
+        AdvisoryViewModel advisory)
     {
         _apiClient = apiClient;
         _dashboard = dashboard;
@@ -72,6 +75,7 @@ public partial class MainViewModel : ObservableObject
         _topN = topN;
         _trend = trend;
         _alerts = alerts;
+        _advisory = advisory;
 
         // Subscribe to timing events — update status bar immediately after
         // ANY successful API call from any page (no polling).

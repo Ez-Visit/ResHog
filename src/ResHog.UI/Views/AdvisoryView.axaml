@@ -1,0 +1,229 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ResHog.UI.ViewModels"
+             xmlns:cvt="using:ResHog.UI.Converters"
+             xmlns:dto="using:ResHog.Shared.Dtos"
+             x:Class="ResHog.UI.Views.AdvisoryView"
+             x:DataType="vm:AdvisoryViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="#FAFAFA" Padding="16,10">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="视图:" VerticalAlignment="Center" FontSize="13" />
+                <ComboBox SelectedItem="{Binding SelectedViewMode}"
+                          ItemsSource="{Binding ViewModes}"
+                          MinWidth="130">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NamedOption">
+                            <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Button Content="刷新"
+                        Command="{Binding LoadCommand}"
+                        IsEnabled="{Binding !IsLoading}"
+                        Padding="14,5" />
+
+                <TextBlock Text="纯推荐系统:仅提供建议,ResHog 不会执行关闭进程/服务等动作。"
+                           FontSize="11" Foreground="#999"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <!-- ============ 当前建议卡片 ============ -->
+        <ScrollViewer Grid.Row="1" IsVisible="{Binding IsViewActive}"
+                      Margin="16,8" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="8">
+                <TextBlock Text="{Binding ActiveCount, StringFormat='当前 {0} 条建议'}"
+                           FontSize="12" Foreground="#888" />
+                <ItemsControl ItemsSource="{Binding Findings}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <Border Background="White" CornerRadius="6"
+                                    BorderBrush="#E0E0E0" BorderThickness="1"
+                                    Padding="12,8" Margin="0,2">
+                                <Grid ColumnDefinitions="4,12,*">
+                                    <Border Grid.Column="0" CornerRadius="2"
+                                            Background="{Binding Severity, Converter={x:Static cvt:SeverityColorConverter.Instance}}" />
+                                    <StackPanel Grid.Column="2" Spacing="4">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding Subject}"
+                                                       FontSize="14" FontWeight="SemiBold" Foreground="#333" />
+                                            <Border Background="#F0F0F0" CornerRadius="3" Padding="6,1">
+                                                <TextBlock Text="{Binding RuleLabel}" FontSize="11" Foreground="#666" />
+                                            </Border>
+                                            <TextBlock Text="{Binding Severity, Converter={x:Static cvt:SeverityNameConverter.Instance}}"
+                                                       FontSize="11"
+                                                       Foreground="{Binding Severity, Converter={x:Static cvt:SeverityColorConverter.Instance}}"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Conclusion}" FontSize="12" Foreground="#444"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding Evidence}" FontSize="11" Foreground="#999" />
+                                        <TextBlock Text="{Binding Suggestion}" FontSize="12" Foreground="#2C6E9C"
+                                                   TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="{Binding LastSeen, StringFormat='最近触发: {0}'}"
+                                                       FontSize="11" Foreground="#AAA" VerticalAlignment="Center" />
+                                            <Button Content="不再提醒"
+                                                    FontSize="11" Padding="8,2"
+                                                    Background="#F5F5F5" BorderBrush="#DDD"
+                                                    Command="{Binding $parent[ItemsControl].DataContext.IgnoreCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- ============ 历史 ============ -->
+        <DataGrid Grid.Row="1" IsVisible="{Binding IsViewHistory}"
+                  ItemsSource="{Binding History}"
+                  AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  BorderThickness="1" BorderBrush="#E0E0E0"
+                  Margin="16,8">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="最近触发" Width="220" SortMemberPath="LastSeen">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <TextBlock Text="{Binding LastSeen}"
+                                       ToolTip.Tip="{Binding LastSeen}"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="主体" Width="220" SortMemberPath="Subject">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <TextBlock Text="{Binding Subject}"
+                                       ToolTip.Tip="{Binding Subject}"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="级别" Width="70" SortMemberPath="Severity">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <TextBlock Text="{Binding Severity, Converter={x:Static cvt:SeverityNameConverter.Instance}}"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="规则" Width="140" SortMemberPath="RuleLabel">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <TextBlock Text="{Binding RuleLabel}"
+                                       ToolTip.Tip="{Binding RuleLabel}"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="结论" Width="*" SortMemberPath="Conclusion">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <TextBlock Text="{Binding Conclusion}"
+                                       ToolTip.Tip="{Binding Conclusion}"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="状态" Width="80" SortMemberPath="Status">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="dto:FindingDto">
+                            <TextBlock Text="{Binding Status, Converter={x:Static cvt:FindingStatusConverter.Instance}}"
+                                       VerticalAlignment="Center" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- ============ 规则设置 ============ -->
+        <Grid Grid.Row="1" IsVisible="{Binding IsViewRules}" RowDefinitions="*,Auto" Margin="16,8">
+            <DataGrid Grid.Row="0"
+                      ItemsSource="{Binding Rules}"
+                      AutoGenerateColumns="False"
+                      CanUserResizeColumns="True"
+                      GridLinesVisibility="Horizontal"
+                      BorderThickness="1" BorderBrush="#E0E0E0">
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="ID" Width="50">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <TextBlock Text="{Binding Id}" VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="说明" Width="190">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding Label}" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="启用" Width="60">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <CheckBox IsChecked="{Binding Enabled}" HorizontalAlignment="Center" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="级别" Width="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <TextBox Text="{Binding Severity}" FontSize="12" Margin="0,2" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="阈值" Width="90">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <TextBox Text="{Binding Threshold}" FontSize="12" Margin="0,2" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="窗口(分)" Width="80">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <TextBox Text="{Binding WindowMinutes}" FontSize="12" Margin="0,2" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="冷却(时)" Width="80">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="dto:AdvisoryRule">
+                                <TextBox Text="{Binding CooldownHours}" FontSize="12" Margin="0,2" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,8,0,0">
+                <Button Content="保存规则"
+                        Command="{Binding SaveRulesCommand}"
+                        IsEnabled="{Binding !IsLoading}"
+                        Padding="16,6" />
+                <TextBlock Text="{Binding SaveMessage}" FontSize="12" VerticalAlignment="Center" />
+                <TextBlock Text="阈值含义因规则而异(R3=基线倍数,R4=%/小时,R6=份额%,R7=实例数);保存后下一分钟评估生效。"
+                           FontSize="11" Foreground="#999" VerticalAlignment="Center" TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Status bar -->
+        <Border Grid.Row="2" Background="#FAFAFA" Padding="16,6"
+                BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding ErrorMessage}" FontSize="12" Foreground="#A32D2D" />
+        </Border>
+    </Grid>
+</UserControl>

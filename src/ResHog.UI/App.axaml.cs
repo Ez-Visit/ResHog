@@ -68,6 +68,7 @@ public partial class App : Application
         collection.AddSingleton<TrendViewModel>();
         collection.AddSingleton<AlertViewModel>();
         collection.AddSingleton<ProcessManagerViewModel>();
+        collection.AddSingleton<AdvisoryViewModel>();
 
         return collection.BuildServiceProvider();
     }

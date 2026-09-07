@@ -222,3 +222,51 @@ public class SeverityNameConverter : IValueConverter
         throw new NotSupportedException();
     }
 }
+
+/// <summary>
+/// 健康顾问建议的严重级别 → 色条颜色(critical 红 / warning 橙 / info 蓝)。
+/// </summary>
+public class SeverityColorConverter : IValueConverter
+{
+    public static readonly SeverityColorConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is not string s)
+            return "#378ADD";
+        return s.ToLowerInvariant() switch
+        {
+            "critical" => "#E24B4A",
+            "warning" => "#EF9F27",
+            _ => "#378ADD"
+        };
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
+/// <summary>诊断建议状态 → 中文(active=活动中 / resolved=已恢复)。</summary>
+public class FindingStatusConverter : IValueConverter
+{
+    public static readonly FindingStatusConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is not string s)
+            return value;
+        return s.ToLowerInvariant() switch
+        {
+            "active" => "活动中",
+            "resolved" => "已恢复",
+            _ => s
+        };
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
