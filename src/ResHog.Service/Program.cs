@@ -70,6 +70,13 @@ try
     });
     builder.Services.AddSingleton<AggregationService>();
     builder.Services.AddSingleton<RetentionService>();
+    // 健康顾问(2026-09-06):规则存 ProgramData\ResHog\rules.json(与 data.db 同目录)
+    builder.Services.AddSingleton<ResHog.Advisory.RuleStore>(sp =>
+    {
+        var opts = sp.GetRequiredService<IOptions<ResHogOptions>>().Value;
+        return new ResHog.Advisory.RuleStore(opts.DbPath);
+    });
+    builder.Services.AddSingleton<ResHog.Advisory.AdvisoryRuleEngine>();
 
     // --- Analysis & query services ---
     builder.Services.AddSingleton<DashboardService>();

@@ -1,4 +1,5 @@
 using System.Reflection;
+using ResHog.Advisory;
 using ResHog.Analysis;
 using ResHog.Services;
 using ResHog.Shared.Dtos;
@@ -150,6 +151,58 @@ public static class ApiEndpoints
         })
         .WithName("Alerts")
         .WithSummary("Alert records");
+
+        // ---------------------------------------------------------------
+        // GET /api/findings?status=active|history  健康诊断建议(2026-09-06)
+        // POST /api/findings/{id}/ignore           不再提醒(只标记,不执行任何动作)
+        // GET  /api/rules / PUT /api/rules         规则读取与保存(rules.json)
+        // ---------------------------------------------------------------
+        group.MapGet("/findings", (AdvisoryRuleEngine engine, string status = "active") =>
+        {
+            try
+            {
+                return Results.Ok(engine.GetFindings(status));
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new ErrorResponseDto(ex.Message), statusCode: 500);
+            }
+        })
+        .WithName("Findings")
+        .WithSummary("Health advisory findings (active or history)");
+
+        group.MapPost("/findings/{id}/ignore", (long id, AdvisoryRuleEngine engine) =>
+        {
+            try
+            {
+                return Results.Ok(new IgnoreFindingResponseDto(engine.IgnoreFinding(id)));
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new ErrorResponseDto(ex.Message), statusCode: 500);
+            }
+        })
+        .WithName("IgnoreFinding")
+        .WithSummary("Suppress a finding (recommend-only system: no actions are executed)");
+
+        group.MapGet("/rules", (RuleStore store) => Results.Ok(new AdvisoryRulesDto(store.Current.ToList())))
+             .WithName("GetRules")
+             .WithSummary("Advisory rules (rules.json)");
+
+        group.MapPut("/rules", (AdvisoryRulesDto dto, RuleStore store) =>
+        {
+            try
+            {
+                store.Save(dto.Rules);
+                return Results.Ok(new IgnoreFindingResponseDto(true));
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new ErrorResponseDto(ex.Message), statusCode: 500);
+            }
+        })
+        .WithName("SaveRules")
+        .WithSummary("Replace advisory rules");
 
         // ---------------------------------------------------------------
         // GET /api/processes

@@ -22,11 +22,16 @@ public class ResHogWorker : BackgroundService
     private readonly AggregationService _aggregation;
     private readonly RetentionService _retention;
     private readonly AlertEngine _alertEngine;
+    private readonly Advisory.AdvisoryRuleEngine _advisory;
     private readonly ResHogOptions _options;
     private readonly ILogger<ResHogWorker> _logger;
 
     // Guards so a slow background heavy task doesn't overlap the next trigger.
     private int _purgeBusy;
+
+    // 健康顾问评估互斥(2026-09-07):防止上一次评估(可能 6~34s)与下一次重叠
+    private int _advisoryBusy;
+    private readonly object _advisoryGate = new();
 
     // 待重试的 samples：BulkInsertWithRetry 重试耗尽后累积，下个周期合并写入。
     // 防止数据丢失：失败的批次进入队列等待下次机会。
@@ -40,6 +45,7 @@ public class ResHogWorker : BackgroundService
         AggregationService aggregation,
         RetentionService retention,
         AlertEngine alertEngine,
+        Advisory.AdvisoryRuleEngine advisory,
         IOptions<ResHogOptions> options,
         ILogger<ResHogWorker> logger)
     {
@@ -48,6 +54,7 @@ public class ResHogWorker : BackgroundService
         _aggregation = aggregation;
         _retention = retention;
         _alertEngine = alertEngine;
+        _advisory = advisory;
         _options = options.Value;
         _logger = logger;
     }
@@ -164,6 +171,21 @@ public class ResHogWorker : BackgroundService
                             _logger.LogWarning(
                                 "Minute aggregation took {Ms}ms", aggSw.ElapsedMilliseconds);
                         }
+
+                        // 健康顾问(2026-09-06):聚合完成后立即评估规则——数据最新鲜,
+                        // 且评估自身有 try/catch 与耗时日志(<200ms 预算)
+                        // 互斥(2026-09-07):前一次评估未完成则跳过本轮(防止 R9 刷新风暴
+                        // 卡死循环的二次影响)
+                        if (_advisoryBusy == 0)
+                        {
+                            lock (_advisoryGate)
+                            {
+                                _advisoryBusy = 1;
+                                try { _advisory.Evaluate(); }
+                                finally { _advisoryBusy = 0; }
+                            }
+                        }
+
                         lastAggregation = DateTime.Now;
                     }
 

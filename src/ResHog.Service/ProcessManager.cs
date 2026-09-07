@@ -163,6 +163,23 @@ public class ProcessManager
     }
 
     /// <summary>
+    /// 只读取缓存,不触发任何刷新(健康顾问 R9 使用,2026-09-07)。
+    /// 背景:R9 每次评估调用 SearchProcesses 会触发后台刷新(3s TTL),R9 每 15s
+    /// 一次的评估被实测拖到 6~34 秒;风险放大的主因是循环刷新→枚举→R9 再触发。
+    /// 注释:热调用者(搜索/页面)继续用 GetCachedProcessList(3s TTL 合理);
+    /// 后台/低敏感调用者用本方法——为读取数据可接受至多 30 秒过期,不触发刷新。
+    /// </summary>
+    public List<ProcessInfoDto> TryGetCachedProcessList()
+    {
+        lock (_processListLock)
+        {
+            return _cachedProcessList is null
+                ? new List<ProcessInfoDto>()
+                : _cachedProcessList;
+        }
+    }
+
+    /// <summary>
     /// Background task: enumerates all processes, then swaps the COMPLETE list into
     /// the shared cache once (FIX-1, 2026-09-04)。
     ///
@@ -180,6 +197,10 @@ public class ProcessManager
             var allPids = System.Diagnostics.Process.GetProcesses()
                 .Select(p => p.Id)
                 .ToArray();
+
+            // 健康顾问 R7(2026-09-06):一次 Toolhelp32 快照采集全系统 pid→ppid(微秒级),
+            // 用于同名多实例的"同父进程"归并展示
+            var ppidMap = SnapshotParentPids();
 
             // REF-2(2026-09-05):枚举并行化——串行 518 进程 ×(GetProcessById+MainModule+
             // Threads.Count+FileDescription 读)≈7-14s;并行 DOP=8 后 2~4s。
@@ -204,7 +225,8 @@ public class ProcessManager
                             "",
                             exePath ?? "",
                             proc.Threads.Count,
-                            display ?? proc.ProcessName
+                            display ?? proc.ProcessName,
+                            ppidMap.TryGetValue(pid, out var pp) ? pp : null
                         ));
                     }
                     catch
@@ -298,6 +320,68 @@ public class ProcessManager
         }
 
         return results;
+    }
+
+    // ============================================================================
+    // Process tree snapshot (Toolhelp32,健康顾问 R7)
+    // ============================================================================
+
+    private const uint TH32CS_SNAPPROCESS = 0x2;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    /// <summary>
+    /// 一次 Toolhelp32 快照采集全系统 pid→parent pid(微秒级,单次系统调用),
+    /// 供进程枚举填充 ParentPid。快照失败返回空表(调用方按未知处理)。
+    /// </summary>
+    private static Dictionary<int, int> SnapshotParentPids()
+    {
+        var map = new Dictionary<int, int>();
+        var handle = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (handle == IntPtr.Zero) return map;
+        try
+        {
+            var entry = new PROCESSENTRY32W { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32W>() };
+            if (Process32FirstW(handle, ref entry))
+            {
+                do
+                {
+                    map[(int)entry.th32ProcessID] = (int)entry.th32ParentProcessID;
+                }
+                while (Process32NextW(handle, ref entry));
+            }
+        }
+        finally
+        {
+            CloseHandle(handle);
+        }
+        return map;
     }
 
     // ====================================================================

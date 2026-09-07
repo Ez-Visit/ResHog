@@ -616,6 +616,31 @@ public class SampleRepository
             ('alert_handle_critical', '20000');
 
         -- ============================================================
+        -- 健康诊断建议(health-advisory,2026-09-06)
+        -- 规则引擎(AdvisoryRuleEngine)每分钟评估 samples_minute 窗口聚合,
+        -- 产出建议卡片;规则本体在 ProgramData\ResHog\rules.json(UI 经 API 编辑)。
+        -- ADD TABLE 走 SchemaSql 幂等创建(存量库下次启动自动建表),
+        -- DROP/ALTER 才需要 migrate.ps1。
+        -- ============================================================
+        CREATE TABLE IF NOT EXISTS findings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id     TEXT NOT NULL,
+            severity    TEXT NOT NULL,
+            subject     TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            evidence    TEXT NOT NULL,
+            conclusion  TEXT NOT NULL,
+            suggestion  TEXT NOT NULL,
+            first_seen  TEXT NOT NULL,
+            last_seen   TEXT NOT NULL,
+            hit_count   INTEGER DEFAULT 1,
+            ignored     INTEGER DEFAULT 0,
+            status      TEXT DEFAULT 'active'
+        );
+        CREATE INDEX IF NOT EXISTS idx_findings_fp ON findings(fingerprint, last_seen);
+        CREATE INDEX IF NOT EXISTS idx_findings_ts ON findings(last_seen);
+
+        -- ============================================================
         -- Schema 版本追踪（缺陷 #14 引入）
         -- 记录已应用的迁移版本，支持未来增量迁移。
         --

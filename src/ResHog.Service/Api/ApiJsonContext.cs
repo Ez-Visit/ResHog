@@ -31,6 +31,12 @@ namespace ResHog.Api;
 [JsonSerializable(typeof(List<ProcessInfoDto>))]
 [JsonSerializable(typeof(KillProcessRequestDto))]
 [JsonSerializable(typeof(KillProcessResponseDto))]
+[JsonSerializable(typeof(AdvisoryRule))]
+[JsonSerializable(typeof(AdvisoryRulesDto))]
+[JsonSerializable(typeof(List<AdvisoryRule>))]
+[JsonSerializable(typeof(FindingDto))]
+[JsonSerializable(typeof(List<FindingDto>))]
+[JsonSerializable(typeof(IgnoreFindingResponseDto))]
 public partial class ApiJsonContext : JsonSerializerContext
 {
 }
