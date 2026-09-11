@@ -199,6 +199,7 @@ public class LineChart : Control
 
         // Y-axis grid lines and labels (5 steps)
         int ySteps = 5;
+        var yStep = maxVal / ySteps;
         for (int i = 0; i <= ySteps; i++)
         {
             var y = top + (bottom - top) * i / ySteps;
@@ -208,7 +209,7 @@ public class LineChart : Control
             context.DrawLine(gridPen, new Point(left, y), new Point(right, y));
 
             // Y label
-            var labelText = FormatValue(val, unit);
+            var labelText = FormatValue(val, unit, yStep);
             var formattedText = new FormattedText(labelText, System.Globalization.CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight, labelFont, 10, labelBrush);
             context.DrawText(formattedText, new Point(left - formattedText.Width - 5, y - formattedText.Height / 2));
@@ -284,18 +285,32 @@ public class LineChart : Control
         return niceNorm * mag;
     }
 
-    private static string FormatValue(double val, string unit)
+    private static string FormatValue(double val, string unit, double step)
     {
+        var decimals = PickDecimals(step);
         if (string.IsNullOrEmpty(unit))
-            return val.ToString("F0");
+            return val.ToString("F" + decimals);
 
         return unit switch
         {
-            "%" => $"{val:F0}%",
-            "MB" => val >= 1024 ? $"{val / 1024:F1}GB" : $"{val:F0}MB",
-            "MB/s" => $"{val:F1} MB/s",
-            _ => $"{val:F1} {unit}"
+            "%" => $"{val.ToString("F" + decimals)}%",
+            "MB" => val >= 1024 ? $"{val / 1024:F1}GB" : $"{val.ToString("F" + decimals)}MB",
+            // 速率单位保留至少 1 位小数，避免大值区间（步长 >= 1）丢失精度感
+            "MB/s" => $"{val.ToString("F" + Math.Max(decimals, 1))} MB/s",
+            _ => $"{val.ToString("F" + decimals)} {unit}"
         };
+    }
+
+    /// <summary>
+    /// Picks decimal places from the Y-axis step so adjacent grid labels stay distinguishable.
+    /// e.g. step 0.2 -> 1 decimal, step 0.05 -> 2 decimals.
+    /// </summary>
+    private static int PickDecimals(double step)
+    {
+        if (step <= 0) return 0;
+        if (step < 0.1) return 2;
+        if (step < 1) return 1;
+        return 0;
     }
 
     private static string FormatTimestamp(string ts)
