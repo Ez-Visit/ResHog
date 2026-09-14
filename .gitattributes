@@ -21,6 +21,14 @@
 *.bat     text eol=crlf
 *.cmd     text eol=crlf
 
+# Python / SQL / LICENSE（跨平台文本，统一 LF）
+*.py      text eol=lf
+*.sql     text eol=lf
+LICENSE   text eol=lf
+
+# Windows 清单文件（XML 家族，随 *.xml 使用 CRLF）
+*.manifest text eol=crlf
+
 # 配置文件
 *.yml     text eol=lf
 *.yaml    text eol=lf

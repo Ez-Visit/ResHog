@@ -61,6 +61,26 @@ jobs:
       - name: Check formatting
         run: dotnet format ResHog.slnx --verify-no-changes --severity warn
 
+  eol-check:
+    name: Line Ending Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify line endings against .gitattributes
+        run: |
+          git ls-files --eol | awk -F'\t' '
+          {
+            split($1, a, /[ \t]+/)
+            idx = a[1]; wt = a[2]
+            if (idx == "i/crlf") { printf "VIOLATION (index not normalized): %s\n", $2; bad = 1 }
+            if ($1 ~ /eol=crlf/ && wt == "w/lf") { printf "VIOLATION (expects CRLF, worktree is LF): %s\n", $2; bad = 1 }
+            if ($1 ~ /eol=lf/ && wt == "w/crlf") { printf "VIOLATION (expects LF, worktree is CRLF): %s\n", $2; bad = 1 }
+          }
+          END { exit (bad ? 1 : 0) }'
+
   analyze:
     name: Code Analysis
     runs-on: windows-latest
