@@ -147,14 +147,14 @@ public class ProcessManager
                 DateTime.Now - _processListCachedAt >= ProcessListRefreshInterval;
         }
 
-            if (needsRefresh && Interlocked.CompareExchange(ref _refreshBusy, 1, 0) == 0)
-            {
-                // REF-1(2026-09-05):FIX-1 把刷新方法改为同步实现后,直接调用会在
-                // HTTP 请求线程上同步执行整轮枚举(~7-14s)——任何间隔>3s 的名称搜索
-                // 都被阻塞(实测:名称搜索 10.1s / 紧接着 15ms;端口搜索不受影响)。
-                // Task.Run 把枚举真正移出请求线程;请求立即返回旧完整缓存(不为空)。
-                _ = Task.Run(RefreshProcessListBatchedAsync);
-            }
+        if (needsRefresh && Interlocked.CompareExchange(ref _refreshBusy, 1, 0) == 0)
+        {
+            // REF-1(2026-09-05):FIX-1 把刷新方法改为同步实现后,直接调用会在
+            // HTTP 请求线程上同步执行整轮枚举(~7-14s)——任何间隔>3s 的名称搜索
+            // 都被阻塞(实测:名称搜索 10.1s / 紧接着 15ms;端口搜索不受影响)。
+            // Task.Run 把枚举真正移出请求线程;请求立即返回旧完整缓存(不为空)。
+            _ = Task.Run(RefreshProcessListBatchedAsync);
+        }
 
         lock (_processListLock)
         {
