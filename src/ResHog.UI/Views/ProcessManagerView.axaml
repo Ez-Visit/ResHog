@@ -178,14 +178,13 @@
                                FontSize="13"
                                TextWrapping="Wrap" />
                     <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+                        <!-- KILL-CONFIRM(2026-10-20):CommandParameter 字符串与 RelayCommand<bool> 类型不匹配导致按钮禁用,拆为无参命令 -->
                         <Button Content="取消"
-                                Command="{Binding ConfirmKillCommand}"
-                                CommandParameter="False"
+                                Command="{Binding CancelKillCommand}"
                                 Padding="20,8"
                                 FontSize="13" />
                         <Button Content="确定终止"
                                 Command="{Binding ConfirmKillCommand}"
-                                CommandParameter="True"
                                 Padding="20,8"
                                 FontSize="13"
                                 Background="#E24B4A"

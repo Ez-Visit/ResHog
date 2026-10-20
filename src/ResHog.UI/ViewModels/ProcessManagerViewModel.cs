@@ -59,17 +59,31 @@ public partial class ProcessManagerViewModel : ViewModelBase
         ShowConfirmOverlay = true;
     }
 
+    /// <summary>
+    /// KILL-CONFIRM(2026-10-20):原实现为 ConfirmKill(bool) + XAML CommandParameter="True"/"False"。
+    /// CommunityToolkit.Mvvm 8.4.x 中 RelayCommand&lt;bool&gt; 对值类型 null 参数 CanExecute 恒为 false，
+    /// 且 XAML 属性字符串无法转换为 bool，导致确认弹窗按钮永久禁用。
+    /// 改为两个无参命令，彻底消除 CommandParameter 类型转换依赖。
+    /// </summary>
     [RelayCommand]
-    private void ConfirmKill(bool confirmed)
+    private void CancelKill()
+    {
+        ShowConfirmOverlay = false;
+        _pendingKillProcess = null;
+    }
+
+    [RelayCommand]
+    private void ConfirmKill()
     {
         ShowConfirmOverlay = false;
 
-        if (confirmed && _pendingKillProcess != null)
-        {
-            _ = ExecuteKillAsync(_pendingKillProcess);
-        }
-
+        var process = _pendingKillProcess;
         _pendingKillProcess = null;
+
+        if (process != null)
+        {
+            _ = ExecuteKillAsync(process);
+        }
     }
 
     private async Task ExecuteKillAsync(ProcessInfoDto process)
